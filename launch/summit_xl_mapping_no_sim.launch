@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- SLAM mapping when simulation is ALREADY running (The Construct course sim) -->
+  <arg name="scan_topic" default="scan"/>
+
+  <include file="$(find summit_xl_autonomous_nav)/launch/includes/gmapping.launch">
+    <arg name="scan_topic" value="$(arg scan_topic)"/>
+  </include>
+
+  <node pkg="teleop_twist_keyboard" type="teleop_twist_keyboard.py" name="teleop_twist_keyboard" output="screen"/>
+
+  <node pkg="rviz" type="rviz" name="rviz" required="false"/>
+</launch>
