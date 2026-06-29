@@ -65,14 +65,17 @@ bootstrap_clearance: 0.35
 bootstrap_forward_clearance: 0.85
 bootstrap_forward_speed: 0.25
 
-# Completion / cleanup
-max_unknown_ratio: 0.10    # consider the room mapped when unknown <= this (in bbox)
-max_runtime: 1200.0        # hard cap on total mapping time (s)
-min_frontier_cells: 6      # ignore tiny noise frontiers in the cleanup phase
-distance_penalty: 5.0      # cleanup utility = cluster_size - penalty * distance
+# Completion / coverage
+max_unknown_ratio: 0.10    # (used by exploration_monitor) save when unknown <= this
+max_runtime: 1800.0        # hard cap on total mapping time (s) - larger for outdoors
+min_frontier_cells: 6      # ignore tiny noise frontiers
+distance_penalty: 5.0      # frontier utility = cluster_size - penalty * distance
+frontier_scan_every: 4     # 360 scan every N reached frontiers (map new areas well)
 
-# Optional virtual boundary - planar LiDAR cannot see drop-offs/stairs.
-# Enable and set the box (meters, map frame) to keep the robot inside a region.
+# Virtual boundary - OFF so the robot maps the WHOLE reachable space, including
+# OTHER ROOMS and OUTSIDE the building. Only enable + set the box (meters, map
+# frame) if the world has unguarded edges/ledges the robot could drive off
+# (a planar LiDAR cannot see drop-offs).
 explore_bounds_enabled: false
 explore_min_x: -100.0
 explore_max_x: 100.0

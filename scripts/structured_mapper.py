@@ -9,7 +9,12 @@ getting stuck:
     bootstrap -> seed 360 spin -> drive to room center -> 360 spin ->
     perimeter sweep at a fixed standoff from the walls -> at each opening:
     stop, 360 spin, enter (creep if narrow), drive to side-room center,
-    360 spin, exit -> bounded frontier cleanup of leftover unknown -> done.
+    360 spin, exit -> full-coverage frontier exploration of the WHOLE
+    reachable space (other rooms AND outside the building) -> done.
+
+    The robot may spawn anywhere (the start pose is read from the laser/scan,
+    nothing is hard-coded), and there is no virtual boundary, so it maps the
+    entire reachable area inside and outside.
 
 Design guarantees:
   * Every point-to-point move goes through move_base, so the costmap +
@@ -154,13 +159,19 @@ class StructuredMapper(object):
         self.bootstrap_forward_clearance = rospy.get_param("~bootstrap_forward_clearance", 0.85)
         self.bootstrap_forward_speed = rospy.get_param("~bootstrap_forward_speed", 0.25)
 
-        # Completion / cleanup
+        # Completion / coverage
         self.max_unknown_ratio = rospy.get_param("~max_unknown_ratio", 0.10)
-        self.max_runtime = rospy.get_param("~max_runtime", 1200.0)
+        self.max_runtime = rospy.get_param("~max_runtime", 1800.0)
         self.min_frontier_cells = int(rospy.get_param("~min_frontier_cells", 6))
         self.distance_penalty = rospy.get_param("~distance_penalty", 5.0)
+        # 360 scan every N reached frontiers so each new room / outdoor area is
+        # mapped from a good vantage, not just glanced at while passing.
+        self.frontier_scan_every = int(rospy.get_param("~frontier_scan_every", 4))
 
-        # Optional virtual boundary (planar LiDAR cannot see drop-offs/stairs)
+        # Optional virtual boundary. OFF by default so the robot maps the WHOLE
+        # reachable space - through doorways, other rooms, and OUTSIDE the
+        # building. WARNING: a planar LiDAR cannot see drop-offs/ledges; only
+        # enable bounds if the world has unguarded edges the robot could fall off.
         self.bounds_enabled = rospy.get_param("~explore_bounds_enabled", False)
         self.bounds_min_x = rospy.get_param("~explore_min_x", -1e9)
         self.bounds_max_x = rospy.get_param("~explore_max_x", 1e9)
@@ -573,13 +584,6 @@ class StructuredMapper(object):
         ratio, _, _, _ = coverage_stats(self.map_msg)
         return ratio
 
-    def coverage_ok(self):
-        ratio, _, known, bbox_total = coverage_stats(self.map_msg)
-        self.unknown_pub.publish(Float32(data=ratio))
-        if bbox_total == 0 or known < 100:
-            return False
-        return ratio <= self.max_unknown_ratio
-
     # --------------------------------------------------------------- phases
     def bootstrap(self):
         """Escape a wall spawn, face open space, and nudge into the room."""
@@ -822,20 +826,26 @@ class StructuredMapper(object):
             min_front=self.creep_min_front,
         )
 
-    def cleanup_frontiers(self):
-        """Phase 3: mop up leftover unknown with standoff-constrained frontier goals."""
-        self.set_state("cleanup")
+    def explore_frontiers(self):
+        """Full-coverage frontier exploration of the WHOLE reachable space.
+
+        After the structured local sweep, this drives to every reachable
+        frontier - through doorways, into other rooms, and OUT of the building
+        to map the exterior too - placing each goal at a safe standoff and doing
+        a periodic 360 scan so new areas are mapped well. There is no virtual
+        boundary, so it does not stop when the first room is done; it ends only
+        when no reachable frontier remains (or on timeout / repeated stuck).
+        """
+        self.set_state("explore")
         self.consecutive_stuck = 0
         clearance = self._clearance_cells()
         last_ratio = 1.0
         last_improve = rospy.Time.now()
+        reached = 0
 
         while not rospy.is_shutdown():
             if self.timed_out():
-                rospy.logwarn("Cleanup hit max runtime - stopping.")
-                break
-            if self.coverage_ok():
-                rospy.loginfo("Coverage target reached.")
+                rospy.logwarn("Exploration hit max runtime - stopping.")
                 break
 
             cells = find_frontier_cells(self.map_msg)
@@ -856,14 +866,17 @@ class StructuredMapper(object):
 
             self.frontier_pub.publish(Int32(data=len(goals)))
             if not goals:
-                rospy.loginfo("No reachable frontiers left.")
+                rospy.loginfo("No reachable frontiers left - whole reachable area mapped.")
                 break
 
             goals.sort(
                 key=lambda g: g[3] - self.distance_penalty * math.hypot(g[0] - rx, g[1] - ry),
                 reverse=True)
             gx, gy, gyaw, _ = goals[0]
-            self.drive_to(gx, gy, facing=gyaw)
+            if self.drive_to(gx, gy, facing=gyaw):
+                reached += 1
+                if reached % self.frontier_scan_every == 0:
+                    self.spin360("frontier-scan")
 
             ratio = self._current_unknown_ratio()
             self.unknown_pub.publish(Float32(data=ratio))
@@ -872,16 +885,16 @@ class StructuredMapper(object):
                 last_improve = rospy.Time.now()
             elif (rospy.Time.now() - last_improve).to_sec() > self.global_progress_timeout:
                 rospy.logwarn(
-                    "No coverage gain for %.0fs - ending cleanup.",
+                    "No coverage gain for %.0fs - ending exploration.",
                     self.global_progress_timeout)
                 break
 
             if self.consecutive_stuck >= self.max_consecutive_stuck:
-                rospy.logwarn("Repeatedly stuck in cleanup - stopping.")
+                rospy.logwarn("Repeatedly stuck - ending exploration.")
                 break
             if self.total_stuck >= self.global_max_stuck:
                 rospy.logwarn(
-                    "Hit global stuck limit (%d) - ending cleanup.",
+                    "Hit global stuck limit (%d) - ending exploration.",
                     self.global_max_stuck)
                 break
 
@@ -915,7 +928,7 @@ class StructuredMapper(object):
         self.spin360("center-spin")
 
         self.perimeter_tour()
-        self.cleanup_frontiers()
+        self.explore_frontiers()
         self.finish()
 
 
