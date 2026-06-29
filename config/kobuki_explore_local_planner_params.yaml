@@ -3,16 +3,19 @@
 # and map drift). Trajectory sample count is cut ~4x to keep the control loop
 # real-time on the shared CPU.
 DWAPlannerROS:
-  max_vel_x: 0.55
+  max_vel_x: 0.45
   min_vel_x: 0.0
-  max_vel_theta: 1.0
-  min_vel_theta: -1.0
-  min_in_place_vel_theta: 0.4
-  max_vel_trans: 0.55
+  # Rotation is capped LOW (0.7 rad/s): faster in-place turns out-run gmapping's
+  # scan matcher on the shared CPU -> "Scan Matching Failed, using odometry" ->
+  # the map drifts and walls smear, which looks like driving through walls.
+  max_vel_theta: 0.7
+  min_vel_theta: -0.7
+  min_in_place_vel_theta: 0.3
+  max_vel_trans: 0.45
   min_vel_trans: 0.0
-  acc_lim_x: 2.5
+  acc_lim_x: 2.0
   acc_lim_y: 0.0
-  acc_lim_theta: 2.5
+  acc_lim_theta: 1.5
 
   xy_goal_tolerance: 0.18
   yaw_goal_tolerance: 0.35

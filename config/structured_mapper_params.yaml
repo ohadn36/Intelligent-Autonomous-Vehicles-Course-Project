@@ -23,8 +23,8 @@ spin_pause: 0.4
 
 # Goal placement / opening + pocket geometry
 goal_min_clearance: 0.30   # never place a goal closer than this to any obstacle
-opening_min_width: 0.6     # ignore gaps narrower than this when detecting rooms
-narrow_passage_width: 0.78 # at/below this width, cross with laser-centered creep
+opening_min_width: 0.50    # detect gaps down to this width as enterable openings
+narrow_passage_width: 0.85 # at/below this width, cross with laser-centered creep
 pocket_clearance: 0.45     # left AND right below this => corridor/pocket
 deadend_front: 0.35        # pocket AND front below this => dead end, do not enter
 approach_standoff: 0.8     # stop this far in front of a doorway before entering
@@ -33,10 +33,14 @@ enter_depth: 0.9           # how far past the threshold to aim when entering a r
 # Watchdogs / anti-stuck (so it never stalls on an unreachable point)
 per_goal_timeout: 14.0     # abandon a move_base goal that makes no progress
 min_travel: 0.12           # less travel than this during a goal = "stuck"
-max_consecutive_stuck: 4   # stop cleanup after this many stuck goals in a row
+max_consecutive_stuck: 6   # stop cleanup after this many stuck goals in a row
 blacklist_radius: 0.40     # don't re-target within this radius of a failed goal
-global_progress_timeout: 90.0  # end cleanup if unknown % stops dropping for this long
+global_progress_timeout: 150.0  # end cleanup if unknown % stops dropping this long
 opening_visited_radius: 1.0    # treat openings within this radius as already visited
+# Corridor creep recovery: when a goal stalls but a narrow gap leads toward it,
+# creep through instead of giving up (keeps tight passages from blocking coverage)
+corridor_creep_range: 3.0  # only creep toward goals within this distance (m)
+corridor_front_min: 0.30   # stop creeping if the front gets closer than this (m)
 
 # Escape (reverse out of a wedge) + creep (slow centered passage)
 escape_clearance: 0.30
@@ -54,7 +58,7 @@ understand_wall_on_stuck: true
 
 # move_base connection + global stuck cap
 server_wait_timeout: 60.0     # fail with a clear error if move_base never appears
-global_max_stuck: 8           # stop the whole tour after this many stuck goals total
+global_max_stuck: 16          # stop the whole tour after this many stuck goals total
 
 # Bootstrap (handle a wall spawn before the tour begins)
 bootstrap_clearance: 0.35

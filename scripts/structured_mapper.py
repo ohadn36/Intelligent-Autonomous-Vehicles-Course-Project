@@ -111,8 +111,8 @@ class StructuredMapper(object):
 
         # Goal placement / opening + pocket geometry
         self.goal_min_clearance = rospy.get_param("~goal_min_clearance", 0.30)
-        self.opening_min_width = rospy.get_param("~opening_min_width", 0.6)
-        self.narrow_passage_width = rospy.get_param("~narrow_passage_width", 0.78)
+        self.opening_min_width = rospy.get_param("~opening_min_width", 0.50)
+        self.narrow_passage_width = rospy.get_param("~narrow_passage_width", 0.85)
         self.pocket_clearance = rospy.get_param("~pocket_clearance", 0.45)
         self.deadend_front = rospy.get_param("~deadend_front", 0.35)
         self.approach_standoff = rospy.get_param("~approach_standoff", 0.8)
@@ -121,10 +121,15 @@ class StructuredMapper(object):
         # Watchdogs / anti-stuck
         self.per_goal_timeout = rospy.get_param("~per_goal_timeout", 14.0)
         self.min_travel = rospy.get_param("~min_travel", 0.12)
-        self.max_consecutive_stuck = int(rospy.get_param("~max_consecutive_stuck", 4))
+        self.max_consecutive_stuck = int(rospy.get_param("~max_consecutive_stuck", 6))
         self.blacklist_radius = rospy.get_param("~blacklist_radius", 0.40)
-        self.global_progress_timeout = rospy.get_param("~global_progress_timeout", 90.0)
+        self.global_progress_timeout = rospy.get_param("~global_progress_timeout", 150.0)
         self.opening_visited_radius = rospy.get_param("~opening_visited_radius", 1.0)
+        # Corridor creep: when a goal stalls but there is a narrow gap toward it,
+        # creep through instead of giving up (keeps small passages from blocking
+        # full coverage of the bounded area).
+        self.corridor_creep_range = rospy.get_param("~corridor_creep_range", 3.0)
+        self.corridor_front_min = rospy.get_param("~corridor_front_min", 0.30)
 
         # Escape / creep
         self.escape_clearance = rospy.get_param("~escape_clearance", 0.30)
@@ -142,7 +147,7 @@ class StructuredMapper(object):
 
         # move_base server connection
         self.server_wait_timeout = rospy.get_param("~server_wait_timeout", 60.0)
-        self.global_max_stuck = int(rospy.get_param("~global_max_stuck", 8))
+        self.global_max_stuck = int(rospy.get_param("~global_max_stuck", 16))
 
         # Bootstrap
         self.bootstrap_clearance = rospy.get_param("~bootstrap_clearance", 0.35)
@@ -395,8 +400,16 @@ class StructuredMapper(object):
         rospy.logwarn("No progress toward (%.2f, %.2f) - recovering.", x, y)
         self.client.cancel_all_goals()
         rospy.sleep(0.2)
-        # If we are nose-to-a-wall, back off a step and look at the wall so the
-        # next decision is informed (instead of pushing diagonally into it).
+        # First: if a narrow passage leads toward the goal, creep through it
+        # instead of giving up. This is how tight corridors/doorways get mapped
+        # (move_base/DWA refuses them, but a slow centered creep fits). If it
+        # works we make progress and do NOT blacklist the goal.
+        if self._attempt_corridor_creep(x, y):
+            self.consecutive_stuck = 0
+            self.mark_progress()
+            return
+        # Otherwise, if we are nose-to-a-wall, back off a step and look at the
+        # wall so the next decision is informed (not a diagonal push into it).
         scan = self.latest_scan
         if (
             self.understand_wall_on_stuck
@@ -409,6 +422,39 @@ class StructuredMapper(object):
         self.blacklist.append((x, y))
         self.consecutive_stuck += 1
         self.total_stuck += 1
+
+    def _attempt_corridor_creep(self, x, y):
+        """If a narrow passage leads toward (x,y), align and creep through it.
+
+        Returns True if the robot made forward progress. Lets tight corridors
+        and doorways get traversed so they do not block full coverage of the
+        bounded area.
+        """
+        scan = self.latest_scan
+        if scan is None:
+            return False
+        try:
+            rx, ry, yaw = self.robot_pose()
+        except TF_EXC:
+            return False
+        if math.hypot(x - rx, y - ry) > self.corridor_creep_range:
+            return False
+        goal_bearing = normalize_angle(math.atan2(y - ry, x - rx) - yaw)
+        opening_bearing, width = doorway_opening(scan, preferred_bearing=goal_bearing)
+        if width <= 0.0 or width > self.narrow_passage_width:
+            return False
+        if abs(opening_bearing) > math.radians(10.0):
+            self.face_bearing_relative(opening_bearing)
+        rospy.loginfo("Narrow passage (~%.2fm) toward goal - creeping through.", width)
+        self.set_state("corridor-creep")
+        return creep_through_passage(
+            self.cmd_pub,
+            self._get_scan,
+            goal_bearing=0.0,
+            speed=self.creep_speed,
+            max_duration=self.creep_duration,
+            min_front=self.corridor_front_min,
+        )
 
     def safe_reverse(self, distance):
         """Reverse up to `distance` m, but ONLY while the rear is provably clear.

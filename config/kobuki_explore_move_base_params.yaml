@@ -10,14 +10,16 @@ planner_frequency: 0.5
 planner_patience: 6.0
 conservative_reset_dist: 2.0
 recovery_behavior_enabled: true
-clearing_rotation_allowed: true
+# Fast in-place spins (clearing rotation + rotate_recovery) out-run gmapping
+# and corrupt the map, so they are DISABLED here. Recovery is limited to
+# clearing the costmaps; the structured_mapper does its own slow, scan-safe
+# back-up-and-360 ("understand the wall") when a goal stalls.
+clearing_rotation_allowed: false
 shutdown_costmaps: false
 oscillation_timeout: 8.0
 oscillation_distance: 0.20
 
 recovery_behaviors:
-  - name: rotate_recovery
-    type: rotate_recovery/RotateRecovery
   - name: conservative_reset
     type: clear_costmap_recovery/ClearCostmapRecovery
   - name: aggressive_reset
