@@ -420,6 +420,139 @@ def cluster_frontier_cells(cells):
     return clusters
 
 
+def min_dist_to_occupied(map_msg, mx, my, max_search=20, occupied_thresh=65):
+    """Grid steps from (mx, my) to the nearest occupied cell (BFS)."""
+    if is_occupied(cell_value(map_msg, mx, my), occupied_thresh):
+        return 0
+    queue = deque([(mx, my, 0)])
+    seen = {(mx, my)}
+    while queue:
+        cx, cy, dist = queue.popleft()
+        if dist >= max_search:
+            continue
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nx, ny = cx + dx, cy + dy
+            if (nx, ny) in seen:
+                continue
+            seen.add((nx, ny))
+            value = cell_value(map_msg, nx, ny)
+            if is_occupied(value, occupied_thresh):
+                return dist + 1
+            if is_free(value):
+                queue.append((nx, ny, dist + 1))
+    return max_search
+
+
+def min_dist_to_unknown(map_msg, mx, my, max_search=30):
+    """Grid steps from (mx, my) to the nearest unknown cell (BFS)."""
+    if is_unknown(cell_value(map_msg, mx, my)):
+        return 0
+    queue = deque([(mx, my, 0)])
+    seen = {(mx, my)}
+    while queue:
+        cx, cy, dist = queue.popleft()
+        if dist >= max_search:
+            continue
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nx, ny = cx + dx, cy + dy
+            if (nx, ny) in seen:
+                continue
+            seen.add((nx, ny))
+            value = cell_value(map_msg, nx, ny)
+            if is_unknown(value):
+                return dist + 1
+            if is_free(value):
+                queue.append((nx, ny, dist + 1))
+    return max_search
+
+
+def free_expanse_from_cluster(map_msg, cluster, max_radius_cells=60):
+    """Free cells reachable from a frontier cluster within a geodesic cap.
+
+    Returns the set of (mx, my) free cells in the same open pocket as the
+    cluster, used to pick an interior scan point (not a wall-hugging goal).
+    """
+    seeds = set(cluster)
+    expanse = set()
+    queue = deque()
+    for mx, my in seeds:
+        if is_free(cell_value(map_msg, mx, my)):
+            expanse.add((mx, my))
+            queue.append((mx, my, 0))
+    while queue:
+        cx, cy, depth = queue.popleft()
+        if depth >= max_radius_cells:
+            continue
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nx, ny = cx + dx, cy + dy
+            if (nx, ny) in expanse:
+                continue
+            if not is_free(cell_value(map_msg, nx, ny)):
+                continue
+            expanse.add((nx, ny))
+            queue.append((nx, ny, depth + 1))
+    return expanse
+
+
+def expanse_scan_center(map_msg, cluster, clearance_cells=2, occupied_thresh=65,
+                        max_expanse_radius=60):
+    """Pick a scan point at the interior center of an open expanse.
+
+    Scores free cells by clearance from obstacles (stay away from walls) and
+    proximity to still-unknown space (the scan must reveal new area). Returns
+    (wx, wy) in world coordinates, or None when no suitable interior point exists.
+    """
+    expanse = free_expanse_from_cluster(map_msg, cluster, max_expanse_radius)
+    if not expanse:
+        return None
+
+    best = None
+    best_score = -1.0
+    for mx, my in expanse:
+        if not cell_region_free(map_msg, mx, my, clearance_cells):
+            continue
+        clearance = float(min_dist_to_occupied(
+            map_msg, mx, my, max_search=25, occupied_thresh=occupied_thresh))
+        if clearance < float(clearance_cells):
+            continue
+        unknown_dist = float(min_dist_to_unknown(map_msg, mx, my, max_search=40))
+        if unknown_dist > 40:
+            continue
+        score = 2.5 * clearance + 0.25 * min(unknown_dist, 15.0)
+        if score > best_score:
+            best_score = score
+            best = (mx, my)
+
+    if best is None:
+        return None
+    return map_to_world(map_msg, best[0], best[1])
+
+
+def find_expanse_scan_centers(map_msg, min_cluster_size=6, clearance_cells=2,
+                              occupied_thresh=65, max_expanse_radius=60):
+    """Return [(wx, wy, cluster_size), ...] for every open expanse to scan.
+
+    Each entry is the interior center of a frontier cluster's open pocket -
+    never a wall-hugging perimeter point.
+    """
+    cells = find_frontier_cells(map_msg)
+    clusters = cluster_frontier_cells(cells)
+    centers = []
+    for cluster in clusters:
+        if len(cluster) < min_cluster_size:
+            continue
+        center = expanse_scan_center(
+            map_msg, cluster,
+            clearance_cells=clearance_cells,
+            occupied_thresh=occupied_thresh,
+            max_expanse_radius=max_expanse_radius,
+        )
+        if center is None:
+            continue
+        centers.append((center[0], center[1], len(cluster)))
+    return centers
+
+
 def frontier_goal_from_cluster(map_msg, cluster, clearance_cells=2):
     """Place a goal on a free, footprint-clear cell that faces the unknown.
 

@@ -1,104 +1,71 @@
-# Structured mapper - deliberate "guided tour" autonomous mapping profile.
-# The robot maps walls from a comfortable standoff (never hugs them), sweeps
-# the perimeter in order, enters each side room to scan it, then mops up any
-# leftover unknown. All point-to-point motion goes through move_base.
+# Center-scan mapper - autonomous mapping WITHOUT wall-hugging.
+# Drives to interior centers of open expanses, 360-scans, max 200 s.
 
-# Frames / topics (scan_topic is overridden by the launch arg)
 map_frame: map
 base_frame: base_footprint
 scan_topic: /kobuki/laser/scan
-cmd_vel_topic: ""          # "" = auto-resolve (/cmd_vel, /mobile_base/..., /kobuki/...)
+cmd_vel_topic: ""
 
-# Perimeter sweep + ray-cast room analysis
-wall_standoff: 0.80        # keep this far from walls while sweeping (map them from here)
-waypoint_spacing: 0.6      # distance between perimeter waypoints (smooth, not crawling)
-ray_count: 72              # rays for center/perimeter/opening analysis (every 5 deg)
-max_ray: 12.0              # match the laser/gmapping max range
-occupied_value: 65         # occupancy-grid value treated as a wall
+occupied_value: 65
 
-# 360 spins (capped <= 1.0 rad/s so gmapping matches scans while turning).
-# Fewer, faster steps = quicker 360 while still scan-safe.
+# Center-scan — prefer deep interior (far from walls)
+max_expanse_radius: 70
+visited_center_radius: 1.0
+goal_min_clearance: 0.35
+
+# Faster 360 scans (still <= 1.0 rad/s for gmapping)
 spin_speed: 1.0
-spin_steps: 4              # 4 x 90 deg with a short pause -> faster clean 360
-spin_pause: 0.25
+spin_steps: 3
+spin_pause: 0.15
 
-# Goal placement / opening + pocket geometry
-goal_min_clearance: 0.30   # never place a goal closer than this to any obstacle
-opening_min_width: 0.50    # detect gaps down to this width as enterable openings
-narrow_passage_width: 0.85 # at/below this width, cross with laser-centered creep
-pocket_clearance: 0.45     # left AND right below this => corridor/pocket
-deadend_front: 0.35        # pocket AND front below this => dead end, do not enter
-approach_standoff: 0.8     # stop this far in front of a doorway before entering
-enter_depth: 0.9           # how far past the threshold to aim when entering a room
+# Corridor creep ONLY inside these map-frame boxes (kitchen entrance).
+# Everywhere else: skip stuck goal, pick next expanse center — no wall-hug.
+# Tune bounds in RViz if spawn shifts the map; click near the passage first.
+corridor_zones:
+  - name: kitchen_passage
+    min_x: -6.5
+    max_x: -2.0
+    min_y: -1.0
+    max_y: 4.0
+    max_passage_width: 1.05
 
-# Watchdogs / anti-stuck (so it never stalls on an unreachable point)
-per_goal_timeout: 14.0     # abandon a move_base goal that makes no progress
-min_travel: 0.12           # less travel than this during a goal = "stuck"
-max_consecutive_stuck: 6   # stop cleanup after this many stuck goals in a row
-blacklist_radius: 0.40     # don't re-target within this radius of a failed goal
-global_progress_timeout: 150.0  # end cleanup if unknown % stops dropping this long
-opening_visited_radius: 1.0    # treat openings within this radius as already visited
-# Corridor creep recovery: when a goal stalls but a narrow gap leads toward it,
-# creep through instead of giving up (keeps tight passages from blocking coverage)
-corridor_creep_range: 3.0  # only creep toward goals within this distance (m)
-corridor_front_min: 0.30   # stop creeping if the front gets closer than this (m)
+narrow_passage_width: 1.05
+corridor_creep_range: 4.0
+corridor_front_min: 0.22
+creep_speed: 0.14
+creep_duration: 5.0
 
-# Escape (reverse out of a wedge) + creep (slow centered passage)
+# Fast skip on unreachable points — do not waste time on tiny pockets
+per_goal_timeout: 9.0
+min_travel: 0.08
+max_consecutive_stuck: 10
+blacklist_radius: 0.30
+global_progress_timeout: 90.0
+global_max_stuck: 50
+max_blacklist_resets: 3
+
 escape_clearance: 0.30
-escape_back_speed: 0.12
-escape_back_time: 1.5
-creep_speed: 0.10
-creep_duration: 4.0
-creep_min_front: 0.24
+escape_back_speed: 0.14
+escape_back_time: 1.2
+creep_min_front: 0.22
+rear_safe_clearance: 0.32
 
-# Reverse safety + "understand the wall" behavior
-rear_safe_clearance: 0.35     # never reverse unless the rear is clear by this much
-back_step_dist: 0.25          # how far to back off when reading a wall
-wall_near_clearance: 0.45     # front below this on a stuck goal => back+scan the wall
-understand_wall_on_stuck: true
+server_wait_timeout: 60.0
 
-# Wall-follow recovery: when pinned at a wall with the goal far on the OTHER
-# side, slide along the wall toward open space to find the real opening.
-wall_follow_on_stuck: true
-wall_follow_speed: 0.22       # forward speed while following the wall (m/s)
-wall_follow_time: 4.0         # max seconds to follow before re-evaluating
-wall_follow_goal_dist: 1.5    # only wall-follow if the goal is farther than this (m)
-
-# move_base connection + global stuck cap
-server_wait_timeout: 60.0     # fail with a clear error if move_base never appears
-global_max_stuck: 25          # stop the whole tour after this many stuck goals total
-max_blacklist_resets: 2       # times to clear the blacklist + retry before giving up
-
-# Bootstrap (handle a wall spawn before the tour begins)
 bootstrap_clearance: 0.35
 bootstrap_forward_clearance: 0.85
-bootstrap_forward_speed: 0.45
+bootstrap_forward_speed: 0.55
 
-# Must-visit points - the robot actively drives to each at least once and
-# scans it, independent of frontier coverage, so a known area is never missed.
-# TWO ways to set them:
-#   1. Live in RViz: use the "Publish Point" tool and click anywhere on the map
-#      while mapping runs. ALWAYS correct - it refers to the current map.
-#   2. visit_waypoints below: hard-coded [x, y] in the map frame. ONLY reliable
-#      if the spawn pose is consistent across runs (gmapping anchors the map at
-#      the spawn pose; with a random spawn the same coords map to a different
-#      physical spot). Read coords from RViz or the gmapping "Laser Pose" log.
-visit_waypoints: []           # e.g. [[2.3, 7.6], [-3.0, 1.0]]
-visit_timeout: 45.0           # max seconds to reach each must-visit point
+visit_waypoints: []
+visit_timeout: 35.0
 
-# Completion / coverage
-max_unknown_ratio: 0.10    # (used by exploration_monitor) save when unknown <= this
-max_runtime: 200.0         # hard cap on the autonomous scan (s); then hand off
-save_map_at_handoff: true  # save maps/summit_world.{pgm,yaml} when the scan ends
-map_save_path: ""          # "" = <pkg>/maps/summit_world
-min_frontier_cells: 6      # ignore tiny noise frontiers
-distance_penalty: 5.0      # frontier utility = cluster_size - penalty * distance
-frontier_scan_every: 4     # 360 scan every N reached frontiers (map new areas well)
+max_unknown_ratio: 0.10
+max_runtime: 200.0
+save_map_at_handoff: true
+map_save_path: ""
+min_frontier_cells: 4
+distance_penalty: 4.0
 
-# Virtual boundary - OFF so the robot maps the WHOLE reachable space, including
-# OTHER ROOMS and OUTSIDE the building. Only enable + set the box (meters, map
-# frame) if the world has unguarded edges/ledges the robot could drive off
-# (a planar LiDAR cannot see drop-offs).
 explore_bounds_enabled: false
 explore_min_x: -100.0
 explore_max_x: 100.0

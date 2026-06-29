@@ -16,8 +16,8 @@
     <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS"/>
     <rosparam file="$(find summit_xl_autonomous_nav)/config/move_base_params.yaml" command="load"/>
     <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_global_planner_params.yaml" command="load"/>
-    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_costmap_common_params.yaml" command="load" ns="global_costmap"/>
-    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_costmap_common_params.yaml" command="load" ns="local_costmap"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_nav_costmap_common_params.yaml" command="load" ns="global_costmap"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_nav_costmap_common_params.yaml" command="load" ns="local_costmap"/>
     <rosparam file="$(find summit_xl_autonomous_nav)/config/local_costmap_params.yaml" command="load"/>
     <rosparam file="$(find summit_xl_autonomous_nav)/config/global_costmap_params.yaml" command="load"/>
     <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_local_planner_params.yaml" command="load"/>

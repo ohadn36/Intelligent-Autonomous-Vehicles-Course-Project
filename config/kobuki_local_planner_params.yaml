@@ -1,40 +1,38 @@
-# DWA local planner — obstacle avoidance, replanning around walls.
-# Navigation runs on the saved static map (no SLAM), so speed can be high:
-# there is no scan-matcher to out-run here.
+# DWA local planner — tuned for narrow corridors on the saved static map.
+# Global navfn may plan through ~0.85 m doorways; DWA must be able to EXECUTE
+# those plans (lower peak speed, stronger near-obstacle scaling, shorter horizon).
 DWAPlannerROS:
-  max_vel_x: 0.85
-  min_vel_x: 0.0
-  max_vel_theta: 2.2
-  min_vel_theta: -2.2
-  min_in_place_vel_theta: 0.5
-  max_vel_trans: 0.85
-  min_vel_trans: 0.0
-  acc_lim_x: 3.0
+  max_vel_x: 0.55
+  min_vel_x: 0.04
+  max_vel_theta: 1.4
+  min_vel_theta: -1.4
+  min_in_place_vel_theta: 0.35
+  max_vel_trans: 0.55
+  min_vel_trans: 0.04
+  acc_lim_x: 2.0
   acc_lim_y: 0.0
-  acc_lim_theta: 4.0
+  acc_lim_theta: 2.5
 
-  # Goal tolerance
   xy_goal_tolerance: 0.15
-  yaw_goal_tolerance: 0.15
+  yaw_goal_tolerance: 0.20
   latch_xy_goal_tolerance: false
 
-  # Look ahead — stop before hitting obstacles, pick detours
-  sim_time: 2.5
+  # Shorter horizon + closer look-ahead -> fits tight corners
+  sim_time: 1.6
   sim_granularity: 0.025
   angular_sim_granularity: 0.05
-  vx_samples: 18
+  vx_samples: 20
   vy_samples: 1
-  vtheta_samples: 36
+  vtheta_samples: 40
 
-  # Cost weights — high occdist_scale = strong obstacle avoidance
-  path_distance_bias: 32.0
-  goal_distance_bias: 20.0
-  occdist_scale: 3.0
+  path_distance_bias: 24.0
+  goal_distance_bias: 24.0
+  occdist_scale: 2.0
 
-  forward_point_distance: 0.35
-  stop_time_buffer: 0.3
-  scaling_speed: 0.25
-  max_scaling_factor: 0.2
+  forward_point_distance: 0.20
+  stop_time_buffer: 0.25
+  scaling_speed: 0.18
+  max_scaling_factor: 0.55
 
   holonomic_robot: false
-  escape_vel: -0.1
+  escape_vel: -0.08

@@ -1,30 +1,23 @@
 #!/usr/bin/env python3
 """
-Structured autonomous mapper for a Kobuki on The Construct (ROS Noetic).
+Center-based autonomous mapper for a Kobuki on The Construct (ROS Noetic).
 
-Replaces greedy frontier exploration with a deliberate "guided tour" so the
-robot maps the whole area smoothly instead of hugging walls, crawling, or
-getting stuck:
+The robot NEVER hugs walls during autonomous mapping. Instead it repeatedly:
 
-    bootstrap -> seed 360 spin -> drive to room center -> 360 spin ->
-    perimeter sweep at a fixed standoff from the walls -> at each opening:
-    stop, 360 spin, enter (creep if narrow), drive to side-room center,
-    360 spin, exit -> full-coverage frontier exploration of the WHOLE
-    reachable space (other rooms AND outside the building) -> done.
+    bootstrap -> seed 360 spin ->
+    [ find center of an open unmapped expanse ->
+      drive there (via move_base) -> 360 spin ] * until done or 200 s ->
+    hand off to the operator.
 
-    The robot may spawn anywhere (the start pose is read from the laser/scan,
-    nothing is hard-coded), and there is no virtual boundary, so it maps the
-    entire reachable area inside and outside.
+Each scan point is the interior center of a known-free pocket that still
+overlooks unknown space - never a perimeter waypoint and never a wall-follow
+path. Narrow passages are crossed only when move_base stalls (laser-guarded
+corridor creep), not as a mapping strategy.
 
 Design guarantees:
-  * Every point-to-point move goes through move_base, so the costmap +
-    planner never let the robot drive through walls or obstacles.
-  * Goals are always placed at a standoff from obstacles (>= goal_min_clearance),
-    so the robot maps a wall from a comfortable distance and never inches into it.
-  * Direct cmd_vel is used ONLY for in-place spins and laser-guarded creep/escape,
-    each gated by front/side clearance so it cannot drive into a wall.
-  * Two-wall pockets / dead-ends are detected and skipped (or reversed out of)
-    instead of stalling.
+  * Every point-to-point move goes through move_base (no driving through walls).
+  * Goals sit at least goal_min_clearance from obstacles (never inch into walls).
+  * Direct cmd_vel is used ONLY for in-place spins and emergency creep/escape.
 """
 
 import math
@@ -60,21 +53,18 @@ from exploration_utils import (
     creep_through_passage,
     doorway_opening,
     drive_cmd,
+    find_expanse_scan_centers,
     find_frontier_cells,
     front_clearance,
     frontier_goal_from_cluster,
     get_robot_pose,
-    is_occupied,
-    is_unknown,
     map_indices,
     map_to_world,
     multi_angle_scan,
     nearest_free_cell,
-    occupied_borders_unknown,
     rear_clearance,
     rear_in_fov,
     resolve_cmd_vel_topic,
-    side_clearances,
     stop_robot,
 )
 
@@ -89,12 +79,6 @@ def normalize_angle(angle):
     return angle
 
 
-def circular_mean(angles):
-    sin_sum = sum(math.sin(a) for a in angles)
-    cos_sum = sum(math.cos(a) for a in angles)
-    return math.atan2(sin_sum, cos_sum)
-
-
 class StructuredMapper(object):
     def __init__(self):
         # Frames / topics
@@ -103,26 +87,21 @@ class StructuredMapper(object):
         self.scan_topic = rospy.get_param("~scan_topic", "/kobuki/laser/scan")
         self.cmd_topic = resolve_cmd_vel_topic(rospy.get_param("~cmd_vel_topic", ""))
 
-        # Perimeter sweep / ray-cast analysis
-        self.wall_standoff = rospy.get_param("~wall_standoff", 0.80)
-        self.waypoint_spacing = rospy.get_param("~waypoint_spacing", 0.6)
-        self.ray_count = int(rospy.get_param("~ray_count", 72))
-        self.max_ray = rospy.get_param("~max_ray", 12.0)
+        # Occupancy grid thresholds
         self.occupied_value = rospy.get_param("~occupied_value", 65)
+
+        # Center-scan exploration (interior of open expanses, never wall-hugging)
+        self.max_expanse_radius = int(rospy.get_param("~max_expanse_radius", 60))
+        self.visited_center_radius = rospy.get_param("~visited_center_radius", 1.2)
 
         # Spins (capped <= 1.0 rad/s so gmapping can match scans while turning)
         self.spin_speed = min(1.0, rospy.get_param("~spin_speed", 0.9))
         self.spin_steps = int(rospy.get_param("~spin_steps", 6))
         self.spin_pause = rospy.get_param("~spin_pause", 0.4)
 
-        # Goal placement / opening + pocket geometry
+        # Goal placement / passage geometry (corridor creep recovery only)
         self.goal_min_clearance = rospy.get_param("~goal_min_clearance", 0.30)
-        self.opening_min_width = rospy.get_param("~opening_min_width", 0.50)
         self.narrow_passage_width = rospy.get_param("~narrow_passage_width", 0.85)
-        self.pocket_clearance = rospy.get_param("~pocket_clearance", 0.45)
-        self.deadend_front = rospy.get_param("~deadend_front", 0.35)
-        self.approach_standoff = rospy.get_param("~approach_standoff", 0.8)
-        self.enter_depth = rospy.get_param("~enter_depth", 0.9)
 
         # Watchdogs / anti-stuck
         self.per_goal_timeout = rospy.get_param("~per_goal_timeout", 14.0)
@@ -130,7 +109,6 @@ class StructuredMapper(object):
         self.max_consecutive_stuck = int(rospy.get_param("~max_consecutive_stuck", 6))
         self.blacklist_radius = rospy.get_param("~blacklist_radius", 0.40)
         self.global_progress_timeout = rospy.get_param("~global_progress_timeout", 150.0)
-        self.opening_visited_radius = rospy.get_param("~opening_visited_radius", 1.0)
         # Corridor creep: when a goal stalls but there is a narrow gap toward it,
         # creep through instead of giving up (keeps small passages from blocking
         # full coverage of the bounded area).
@@ -145,19 +123,8 @@ class StructuredMapper(object):
         self.creep_duration = rospy.get_param("~creep_duration", 4.0)
         self.creep_min_front = rospy.get_param("~creep_min_front", 0.24)
 
-        # Reverse safety + "understand the wall" behavior
+        # Reverse safety (escape only - never used for wall-hugging mapping)
         self.rear_safe_clearance = rospy.get_param("~rear_safe_clearance", 0.35)
-        self.back_step_dist = rospy.get_param("~back_step_dist", 0.25)
-        self.wall_near_clearance = rospy.get_param("~wall_near_clearance", 0.45)
-        self.understand_wall_on_stuck = rospy.get_param("~understand_wall_on_stuck", True)
-
-        # Wall-follow recovery: when pinned at a wall with the goal far on the
-        # OTHER side, slide along the wall toward open space to find the real
-        # opening, instead of grinding straight into the wall.
-        self.wall_follow_on_stuck = rospy.get_param("~wall_follow_on_stuck", True)
-        self.wall_follow_speed = rospy.get_param("~wall_follow_speed", 0.14)
-        self.wall_follow_time = rospy.get_param("~wall_follow_time", 4.0)
-        self.wall_follow_goal_dist = rospy.get_param("~wall_follow_goal_dist", 1.5)
 
         # move_base server connection
         self.server_wait_timeout = rospy.get_param("~server_wait_timeout", 60.0)
@@ -191,9 +158,13 @@ class StructuredMapper(object):
         self.map_save_path = rospy.get_param("~map_save_path", "")
         self.min_frontier_cells = int(rospy.get_param("~min_frontier_cells", 6))
         self.distance_penalty = rospy.get_param("~distance_penalty", 5.0)
-        # 360 scan every N reached frontiers so each new room / outdoor area is
-        # mapped from a good vantage, not just glanced at while passing.
-        self.frontier_scan_every = int(rospy.get_param("~frontier_scan_every", 4))
+        # Corridor creep is ONLY allowed inside these map-frame boxes (e.g.
+        # kitchen entrance). Everywhere else the robot skips stuck goals and
+        # picks the next expanse center — never hugs walls.
+        self.corridor_zones = []
+        for zone in rospy.get_param("~corridor_zones", []):
+            if isinstance(zone, dict) and "min_x" in zone:
+                self.corridor_zones.append(zone)
 
         # Optional virtual boundary. OFF by default so the robot maps the WHOLE
         # reachable space - through doorways, other rooms, and OUTSIDE the
@@ -208,7 +179,7 @@ class StructuredMapper(object):
         self.map_msg = None
         self.latest_scan = None
         self.blacklist = []
-        self.visited_openings = []
+        self.visited_centers = []
         self.consecutive_stuck = 0
         self.total_stuck = 0
         self.start_time = None
@@ -310,42 +281,31 @@ class StructuredMapper(object):
                 return True
         return False
 
-    def is_opening_visited(self, ax, ay):
-        for vx, vy in self.visited_openings:
-            if math.hypot(ax - vx, ay - vy) < self.opening_visited_radius:
+    def is_center_visited(self, x, y):
+        for vx, vy in self.visited_centers:
+            if math.hypot(x - vx, y - vy) < self.visited_center_radius:
                 return True
         return False
 
-    def cast_ray(self, ox, oy, angle):
-        """March a ray on the occupancy grid; classify what it hits.
+    def _corridor_zone_at(self, x, y):
+        """Return the corridor zone dict containing (x,y), or None."""
+        for zone in self.corridor_zones:
+            if (
+                zone["min_x"] <= x <= zone["max_x"]
+                and zone["min_y"] <= y <= zone["max_y"]
+            ):
+                return zone
+        return None
 
-        Returns (kind, distance, x, y, mx, my) where kind is "hit" (wall),
-        "unknown" (reached unmapped space -> opening direction) or "max"
-        (free all the way to range). mx,my are the grid indices of the cell
-        that ended the ray.
-        """
-        map_msg = self.map_msg
-        step = max(0.02, map_msg.info.resolution * 0.5)
-        cos_a = math.cos(angle)
-        sin_a = math.sin(angle)
-        r = map_msg.info.resolution
-        while r <= self.max_ray:
-            wx = ox + r * cos_a
-            wy = oy + r * sin_a
-            mx, my = map_indices(map_msg, wx, wy)
-            value = cell_value(map_msg, mx, my)
-            if is_occupied(value, self.occupied_value):
-                return "hit", r, wx, wy, mx, my
-            if is_unknown(value):
-                return "unknown", r, wx, wy, mx, my
-            r += step
-        ex = ox + self.max_ray * cos_a
-        ey = oy + self.max_ray * sin_a
-        mx, my = map_indices(map_msg, ex, ey)
-        return "max", self.max_ray, ex, ey, mx, my
-
-    def _clearance_cells(self):
-        return max(2, int(round(self.goal_min_clearance / self.map_msg.info.resolution)))
+    def _corridor_recovery_allowed(self, gx, gy):
+        """Corridor creep is permitted only inside configured zones."""
+        if not self.corridor_zones:
+            return False
+        robot = self.robot_xy()
+        if robot is None:
+            return False
+        rx, ry = robot
+        return self._corridor_zone_at(gx, gy) is not None or self._corridor_zone_at(rx, ry) is not None
 
     def snap_to_clear(self, x, y):
         """Return a footprint-clear point near (x,y) with goal_min_clearance, or (None,None)."""
@@ -361,27 +321,8 @@ class StructuredMapper(object):
             return None, None
         return map_to_world(map_msg, free[0], free[1])
 
-    def compute_room_center(self):
-        """Estimate the centroid of the room around the robot from wall hits."""
-        pose = self.robot_xy()
-        if pose is None:
-            return None
-        ox, oy = pose
-        xs, ys = [], []
-        for i in range(self.ray_count):
-            angle = -math.pi + (2.0 * math.pi * i) / self.ray_count
-            kind, _, hx, hy, _, _ = self.cast_ray(ox, oy, angle)
-            if kind == "hit":
-                xs.append(hx)
-                ys.append(hy)
-        if len(xs) < max(4, self.ray_count // 6):
-            return ox, oy
-        cx = sum(xs) / float(len(xs))
-        cy = sum(ys) / float(len(ys))
-        sx, sy = self.snap_to_clear(cx, cy)
-        if sx is None or not self.within_bounds(sx, sy):
-            return ox, oy
-        return sx, sy
+    def _clearance_cells(self):
+        return max(2, int(round(self.goal_min_clearance / self.map_msg.info.resolution)))
 
     # ------------------------------------------------------------- move_base
     def make_goal(self, x, y, yaw):
@@ -422,6 +363,11 @@ class StructuredMapper(object):
             return False
         yaw = facing if facing is not None else math.atan2(sy - ry, sx - rx)
 
+        # In a narrow-corridor zone only: try laser-centered creep BEFORE
+        # move_base (which often refuses tight doorways). Nowhere else.
+        if self._corridor_recovery_allowed(sx, sy):
+            self._attempt_corridor_creep(sx, sy)
+
         self.client.send_goal(self.make_goal(sx, sy, yaw))
         finished = self.client.wait_for_result(rospy.Duration(timeout))
         state = self.client.get_state()
@@ -446,81 +392,34 @@ class StructuredMapper(object):
         rospy.logwarn("No progress toward (%.2f, %.2f) - recovering.", x, y)
         self.client.cancel_all_goals()
         rospy.sleep(0.2)
-        # First: if a narrow passage leads toward the goal, creep through it
-        # instead of giving up. This is how tight corridors/doorways get mapped
-        # (move_base/DWA refuses them, but a slow centered creep fits). If it
-        # works we make progress and do NOT blacklist the goal.
-        if self._attempt_corridor_creep(x, y):
-            self.consecutive_stuck = 0
-            self.mark_progress()
-            return
-        # Pinned at a wall with the goal far on the other side? Slide along the
-        # wall toward open space to discover the opening, then drop THIS goal so
-        # a reachable frontier is chosen next (avoids grinding into the wall).
-        followed = self._wall_follow_to_find_opening(x, y)
-        if not followed:
-            scan = self.latest_scan
-            if (
-                self.understand_wall_on_stuck
-                and scan is not None
-                and front_clearance(scan) < self.wall_near_clearance
-            ):
-                self.understand_wall()
-            elif not self.escape_if_boxed_in():
-                self.unstick_rotate(x, y)
+        # Corridor creep ONLY inside configured zones (e.g. kitchen passage).
+        if self._corridor_recovery_allowed(x, y):
+            if self._attempt_corridor_creep(x, y):
+                self.consecutive_stuck = 0
+                self.mark_progress()
+                return
+        if not self.escape_if_boxed_in():
+            self.unstick_rotate(x, y)
         self.blacklist.append((x, y))
         self.consecutive_stuck += 1
         self.total_stuck += 1
-        if followed:
-            self.mark_progress()
-
-    def _wall_follow_to_find_opening(self, x, y):
-        """Slide toward the most open direction to find an opening in a wall.
-
-        Triggered when the robot is nose-to-a-wall but the goal is far beyond
-        it: the connecting doorway is somewhere ALONG the wall, so driving into
-        the wall never works. Turn to the most open bearing (tangential to the
-        wall / toward the opening) and creep there, laser-guarded and bounded.
-        Returns True if the robot moved.
-        """
-        if not self.wall_follow_on_stuck:
-            return False
-        scan = self.latest_scan
-        if scan is None:
-            return False
-        rxy = self.robot_xy()
-        if rxy is None:
-            return False
-        if math.hypot(x - rxy[0], y - rxy[1]) < self.wall_follow_goal_dist:
-            return False  # goal is near; this is not a cross-the-wall problem
-        if front_clearance(scan) >= self.wall_near_clearance:
-            return False  # not actually pinned against a wall
-        self.set_state("wall-follow")
-        rospy.loginfo("Pinned at a wall, goal is beyond it - following wall to find the opening.")
-        self.face_bearing_relative(best_open_bearing(self.latest_scan))
-        moved = False
-        end = rospy.Time.now() + rospy.Duration(self.wall_follow_time)
-        rate = rospy.Rate(10)
-        while not rospy.is_shutdown() and rospy.Time.now() < end:
-            scan = self.latest_scan
-            if scan is None or front_clearance(scan) < self.creep_min_front:
-                break
-            twist = Twist()
-            twist.linear.x = self.wall_follow_speed
-            self.cmd_pub.publish(twist)
-            moved = True
-            rate.sleep()
-        stop_robot(self.cmd_pub)
-        rospy.sleep(0.2)
-        return moved
 
     def _attempt_corridor_creep(self, x, y):
-        """If a narrow passage leads toward (x,y), align and creep through it.
+        """Laser-centered creep through a narrow gap toward (x,y).
 
-        Returns True if the robot made forward progress. Lets tight corridors
-        and doorways get traversed so they do not block full coverage of the
-        bounded area.
+        Only runs inside corridor_zones — never wall-hugs in open areas.
         """
+        if not self._corridor_recovery_allowed(x, y):
+            return False
+        zone = self._corridor_zone_at(x, y)
+        if zone is None:
+            robot = self.robot_xy()
+            if robot is not None:
+                zone = self._corridor_zone_at(robot[0], robot[1])
+        max_width = (
+            zone.get("max_passage_width", self.narrow_passage_width)
+            if zone else self.narrow_passage_width
+        )
         scan = self.latest_scan
         if scan is None:
             return False
@@ -532,11 +431,12 @@ class StructuredMapper(object):
             return False
         goal_bearing = normalize_angle(math.atan2(y - ry, x - rx) - yaw)
         opening_bearing, width = doorway_opening(scan, preferred_bearing=goal_bearing)
-        if width <= 0.0 or width > self.narrow_passage_width:
+        if width <= 0.0 or width > max_width:
             return False
         if abs(opening_bearing) > math.radians(10.0):
             self.face_bearing_relative(opening_bearing)
-        rospy.loginfo("Narrow passage (~%.2fm) toward goal - creeping through.", width)
+        rospy.loginfo(
+            "Corridor zone: narrow passage ~%.2fm — creeping through.", width)
         self.set_state("corridor-creep")
         return creep_through_passage(
             self.cmd_pub,
@@ -581,18 +481,6 @@ class StructuredMapper(object):
         stop_robot(self.cmd_pub)
         rospy.sleep(0.2)
         return travelled > 0.02
-
-    def understand_wall(self):
-        """Back one safe step, then 360-scan to read how the wall is built.
-
-        Replaces 'inch diagonally into the wall'. After this the perimeter is
-        re-analyzed from the new vantage, so the robot moves PARALLEL to the
-        wall toward the part that is still unmapped.
-        """
-        rospy.loginfo("Reached a wall - backing one step and scanning to read it.")
-        self.set_state("understand-wall")
-        self.safe_reverse(self.back_step_dist)
-        self.spin360("wall-scan")
 
     def escape_if_boxed_in(self):
         """Reverse out when wedged against a wall/corner so a plan can start again."""
@@ -710,208 +598,11 @@ class StructuredMapper(object):
         rospy.set_param("/exploration_bootstrap/complete", True)
         self.mark_progress()
 
-    def cluster_openings(self, opening_rays, ox, oy):
-        """Group adjacent no-hit rays into side-room/corridor openings."""
-        if not opening_rays:
-            return []
-        angular_step = (2.0 * math.pi) / self.ray_count
-        groups = []
-        current = [opening_rays[0]]
-        for prev, curr in zip(opening_rays, opening_rays[1:]):
-            if abs(normalize_angle(curr[0] - prev[0])) <= 1.8 * angular_step:
-                current.append(curr)
-            else:
-                groups.append(current)
-                current = [curr]
-        groups.append(current)
-        # Merge wrap-around (last group adjacent to first across +/-pi).
-        if len(groups) > 1:
-            first, last = groups[0], groups[-1]
-            if abs(normalize_angle(first[0][0] - last[-1][0])) <= 1.8 * angular_step:
-                groups[0] = last + first
-                groups.pop()
-
-        openings = []
-        for group in groups:
-            bearings = [a for a, _ in group]
-            dists = sorted(d for _, d in group)
-            mean_bearing = circular_mean(bearings)
-            mean_dist = dists[len(dists) // 2]
-            half_width = 0.5 * len(group) * angular_step
-            if half_width < math.pi / 2.0:
-                est_width = 2.0 * mean_dist * math.sin(half_width)
-            else:
-                est_width = mean_dist
-            if est_width < self.opening_min_width:
-                continue
-            approach_d = max(self.goal_min_clearance, mean_dist - self.approach_standoff)
-            ax = ox + approach_d * math.cos(mean_bearing)
-            ay = oy + approach_d * math.sin(mean_bearing)
-            enter_d = mean_dist + self.enter_depth
-            tx = ox + enter_d * math.cos(mean_bearing)
-            ty = oy + enter_d * math.sin(mean_bearing)
-            openings.append(
-                {
-                    "bearing": mean_bearing,
-                    "dist": mean_dist,
-                    "approach": (ax, ay),
-                    "enter": (tx, ty),
-                    "width": est_width,
-                }
-            )
-        return openings
-
-    def analyze_from(self, ox, oy):
-        """Ray-cast from (ox,oy): build a standoff perimeter ring + opening list.
-
-        Perimeter waypoints are created ONLY for wall segments that still
-        border unknown space. A wall that is already fully mapped is skipped -
-        there is no reason to approach it (the user's rule: "if it's mapped,
-        no need to get close"). Openings are rays that reach UNKNOWN space
-        (a real gap to a room/corridor), not rays that merely run free to max
-        range inside the same room.
-        """
-        ring = []
-        opening_rays = []
-        prev_x = None
-        prev_y = None
-        for i in range(self.ray_count):
-            angle = -math.pi + (2.0 * math.pi * i) / self.ray_count
-            kind, dist, _, _, cmx, cmy = self.cast_ray(ox, oy, angle)
-            if kind == "unknown":
-                opening_rays.append((angle, dist))
-                continue
-            if kind != "hit":
-                continue
-            # Skip walls that are already fully observed.
-            if not occupied_borders_unknown(self.map_msg, cmx, cmy, radius_cells=3):
-                continue
-            standoff_d = dist - self.wall_standoff
-            if standoff_d < self.goal_min_clearance:
-                continue
-            wx = ox + standoff_d * math.cos(angle)
-            wy = oy + standoff_d * math.sin(angle)
-            sx, sy = self.snap_to_clear(wx, wy)
-            if sx is None or not self.within_bounds(sx, sy):
-                continue
-            if prev_x is not None and math.hypot(sx - prev_x, sy - prev_y) < self.waypoint_spacing:
-                continue
-            # Travel tangentially along the wall for a smooth sweep.
-            yaw = normalize_angle(angle + math.pi / 2.0)
-            ring.append((angle, sx, sy, yaw))
-            prev_x = sx
-            prev_y = sy
-        openings = self.cluster_openings(opening_rays, ox, oy)
-        return ring, openings
-
-    def perimeter_tour(self):
-        """Sweep the room perimeter at standoff, entering each opening in order."""
-        center = self.robot_xy()
-        if center is None:
-            return
-        ox, oy = center
-        ring, openings = self.analyze_from(ox, oy)
-        rospy.loginfo("Perimeter plan: %d waypoints, %d openings.", len(ring), len(openings))
-        if not ring and not openings:
-            rospy.loginfo(
-                "Nothing to sweep from here (walls already mapped, no openings) "
-                "- going straight to cleanup.")
-            return
-
-        items = [(bearing, "wp", x, y, yaw) for (bearing, x, y, yaw) in ring]
-        items += [(op["bearing"], "opening", op) for op in openings]
-        items.sort(key=lambda t: t[0])
-
-        for item in items:
-            if rospy.is_shutdown() or self.timed_out():
-                return
-            if self.total_stuck >= self.global_max_stuck:
-                rospy.logwarn(
-                    "Hit global stuck limit (%d) during sweep - moving to cleanup.",
-                    self.global_max_stuck)
-                return
-            if item[1] == "wp":
-                self.set_state("sweep")
-                self.drive_to(item[2], item[3], facing=item[4])
-            else:
-                self.visit_room(item[2])
-
-    def visit_room(self, opening):
-        ax, ay = opening["approach"]
-        if self.is_opening_visited(ax, ay):
-            return
-        self.set_state("opening-approach")
-        reached = self.drive_to(ax, ay, facing=opening["bearing"])
-        self.visited_openings.append((ax, ay))
-        if not reached:
-            rospy.logwarn("Could not reach opening entrance - skipping it.")
-            return
-
-        self.spin360("opening-spin")
-
-        scan = self.latest_scan
-        if scan is None:
-            return
-        left, right, front = side_clearances(scan)
-        opening_bearing, width = doorway_opening(scan)
-        is_pocket = left <= self.pocket_clearance and right <= self.pocket_clearance
-        if front <= self.deadend_front and is_pocket:
-            rospy.logwarn(
-                "Opening is a dead-end pocket (L%.2f R%.2f F%.2f) - not entering.",
-                left, right, front)
-            return
-
-        if not self.enter_passage(opening, opening_bearing, width):
-            rospy.logwarn("Could not enter the room - skipping.")
-            return
-
-        room_center = self.compute_room_center()
-        if room_center is not None:
-            self.set_state("room-center")
-            self.drive_to(room_center[0], room_center[1], timeout=self.per_goal_timeout * 1.5)
-        self.spin360("room-spin")
-        self.exit_room(opening)
-
-    def enter_passage(self, opening, opening_bearing, width):
-        """Cross the doorway: creep through if narrow, else drive in via move_base."""
-        if abs(opening_bearing) > math.radians(10.0):
-            self.face_bearing_relative(opening_bearing)
-        if width <= self.narrow_passage_width:
-            self.set_state("creep-in")
-            return creep_through_passage(
-                self.cmd_pub,
-                self._get_scan,
-                goal_bearing=0.0,
-                speed=self.creep_speed,
-                max_duration=self.creep_duration,
-                min_front=self.creep_min_front,
-            )
-        self.set_state("enter")
-        tx, ty = opening["enter"]
-        return self.drive_to(tx, ty, timeout=self.per_goal_timeout)
-
-    def exit_room(self, opening):
-        ax, ay = opening["approach"]
-        self.set_state("exit")
-        if self.drive_to(ax, ay, timeout=self.per_goal_timeout * 1.5):
-            return
-        # Doorway too tight for move_base on the way out: turn around and creep.
-        self.face_bearing(normalize_angle(opening["bearing"] + math.pi))
-        creep_through_passage(
-            self.cmd_pub,
-            self._get_scan,
-            goal_bearing=0.0,
-            speed=self.creep_speed,
-            max_duration=self.creep_duration,
-            min_front=self.creep_min_front,
-        )
-
     def service_visits(self):
         """Actively drive to every queued must-visit point (>= once each).
 
-        Independent of frontiers: guarantees the robot physically reaches each
-        requested area (e.g. the kitchen) and scans it, so known regions are
-        never missed. Uses the same standoff + recovery as any other goal.
+        Independent of center-scan: guarantees the robot physically reaches each
+        requested area and scans it. Uses the same standoff + recovery as any goal.
         """
         while self.pending_visits and not rospy.is_shutdown():
             if self.timed_out():
@@ -919,8 +610,6 @@ class StructuredMapper(object):
             vx, vy = self.pending_visits.pop(0)
             rospy.loginfo("Actively visiting requested point (%.2f, %.2f).", vx, vy)
             self.set_state("visit")
-            # Drop any blacklist entry near a deliberately-requested point so it
-            # is not refused because of an earlier transient failure.
             self.blacklist = [
                 b for b in self.blacklist
                 if math.hypot(b[0] - vx, b[1] - vy) >= self.blacklist_radius
@@ -928,68 +617,95 @@ class StructuredMapper(object):
             self.drive_to(vx, vy, timeout=self.visit_timeout)
             self.spin360("visit-scan")
 
-    def explore_frontiers(self):
-        """Full-coverage frontier exploration of the WHOLE reachable space.
+    def center_scan_loop(self):
+        """Drive to interior centers of open expanses and 360-scan each one.
 
-        After the structured local sweep, this drives to every reachable
-        frontier - through doorways, into other rooms, and OUT of the building
-        to map the exterior too - placing each goal at a safe standoff and doing
-        a periodic 360 scan so new areas are mapped well. There is no virtual
-        boundary, so it does not stop when the first room is done; it ends only
-        when no reachable frontier remains (or on timeout / repeated stuck).
+        Never places goals on walls or perimeter rings. Each iteration picks the
+        best unvisited center of a free pocket that still overlooks unknown space,
+        navigates there via move_base, spins 360, then repeats until the map is
+        covered or max_runtime (200 s) expires.
         """
-        self.set_state("explore")
+        self.set_state("center-scan")
         self.consecutive_stuck = 0
         clearance = self._clearance_cells()
         last_ratio = 1.0
         last_improve = rospy.Time.now()
-        reached = 0
+        scans_done = 0
         blacklist_resets = 0
         max_blacklist_resets = int(rospy.get_param("~max_blacklist_resets", 2))
 
         while not rospy.is_shutdown():
             if self.timed_out():
-                rospy.logwarn("Exploration hit max runtime - stopping.")
+                rospy.logwarn("Center-scan hit max runtime (%.0fs) - stopping.", self.max_runtime)
                 break
 
-            # Points requested live in RViz get priority and are always visited.
             if self.pending_visits:
                 self.service_visits()
                 last_improve = rospy.Time.now()
 
-            cells = find_frontier_cells(self.map_msg)
-            clusters = cluster_frontier_cells(cells)
+            centers = find_expanse_scan_centers(
+                self.map_msg,
+                min_cluster_size=self.min_frontier_cells,
+                clearance_cells=clearance,
+                occupied_thresh=self.occupied_value,
+                max_expanse_radius=self.max_expanse_radius,
+            )
+
             robot = self.robot_xy() or (0.0, 0.0)
             rx, ry = robot
-            goals = []
-            for cluster in clusters:
-                if len(cluster) < self.min_frontier_cells:
+            candidates = []
+            for cx, cy, size in centers:
+                if self.is_center_visited(cx, cy):
                     continue
-                goal = frontier_goal_from_cluster(self.map_msg, cluster, clearance_cells=clearance)
-                if goal is None:
+                if self.is_blacklisted(cx, cy):
                     continue
-                gx, gy, gyaw = goal
-                if self.is_blacklisted(gx, gy) or not self.within_bounds(gx, gy):
+                if not self.within_bounds(cx, cy):
                     continue
-                goals.append((gx, gy, gyaw, len(cluster)))
+                candidates.append((cx, cy, size))
 
-            self.frontier_pub.publish(Int32(data=len(goals)))
-            if not goals:
-                rospy.loginfo("No reachable frontiers left - whole reachable area mapped.")
-                break
+            self.frontier_pub.publish(Int32(data=len(candidates)))
 
-            goals.sort(
-                key=lambda g: g[3] - self.distance_penalty * math.hypot(g[0] - rx, g[1] - ry),
-                reverse=True)
-            gx, gy, gyaw, _ = goals[0]
-            if self.drive_to(gx, gy, facing=gyaw):
-                reached += 1
-                # Reaching a new frontier IS progress. Reset the no-gain timer
-                # so a long transit across already-mapped space (e.g. driving
-                # to a far room like the kitchen) does not abort exploration.
+            if not candidates:
+                ratio = self._current_unknown_ratio()
+                if ratio <= self.max_unknown_ratio:
+                    rospy.loginfo(
+                        "No unvisited expanse centers and unknown ~%.1f%% - done.",
+                        ratio * 100.0)
+                    break
+                # Fallback: try a frontier-edge goal (still via move_base, not
+                # wall-hug) when interior centers are exhausted but unknown remains.
+                if not self._attempt_frontier_fallback(clearance, rx, ry):
+                    if blacklist_resets < max_blacklist_resets and self.blacklist:
+                        blacklist_resets += 1
+                        rospy.logwarn(
+                            "No centers reachable - clearing blacklist (reset %d/%d).",
+                            blacklist_resets, max_blacklist_resets)
+                        self.blacklist = []
+                        self.consecutive_stuck = 0
+                        continue
+                    rospy.logwarn("No reachable expanse centers left - stopping.")
+                    break
                 last_improve = rospy.Time.now()
-                if reached % self.frontier_scan_every == 0:
-                    self.spin360("frontier-scan")
+                continue
+
+            candidates.sort(
+                key=lambda c: c[2] - self.distance_penalty * math.hypot(c[0] - rx, c[1] - ry),
+                reverse=True)
+            cx, cy, size = candidates[0]
+            rospy.loginfo(
+                "Expanse center (%.2f, %.2f) size=%d - driving to scan.",
+                cx, cy, size)
+            self.set_state("go-to-center")
+            # Small frontiers get a short timeout — skip fast, try the next center.
+            timeout = self.per_goal_timeout
+            if size < self.min_frontier_cells * 3:
+                timeout = max(6.0, self.per_goal_timeout * 0.6)
+            if self.drive_to(cx, cy, timeout=timeout):
+                self.visited_centers.append((cx, cy))
+                scans_done += 1
+                self.spin360("center-scan")
+                last_improve = rospy.Time.now()
+                rospy.loginfo("Completed scan #%d at expanse center.", scans_done)
 
             ratio = self._current_unknown_ratio()
             self.unknown_pub.publish(Float32(data=ratio))
@@ -997,42 +713,64 @@ class StructuredMapper(object):
                 last_ratio = ratio
                 last_improve = rospy.Time.now()
             elif (rospy.Time.now() - last_improve).to_sec() > self.global_progress_timeout:
-                # No coverage gain and not reaching frontiers for a long time.
-                # Before giving up, drop the blacklist a couple of times: a
-                # frontier (e.g. the kitchen) may have been blacklisted during
-                # an earlier stuck episode but be reachable now.
                 if blacklist_resets < max_blacklist_resets and self.blacklist:
                     blacklist_resets += 1
                     rospy.logwarn(
-                        "Stalled for %.0fs - clearing blacklist (reset %d/%d) and retrying.",
+                        "Stalled for %.0fs - clearing blacklist (reset %d/%d).",
                         self.global_progress_timeout, blacklist_resets, max_blacklist_resets)
                     self.blacklist = []
                     self.consecutive_stuck = 0
                     last_improve = rospy.Time.now()
                     continue
                 rospy.logwarn(
-                    "No reachable progress for %.0fs - ending exploration.",
+                    "No coverage gain for %.0fs - ending center-scan.",
                     self.global_progress_timeout)
                 break
 
             if self.consecutive_stuck >= self.max_consecutive_stuck:
-                # Don't end outright - clear the blacklist once and keep trying
-                # so a far reachable room is not abandoned over local stalls.
                 if blacklist_resets < max_blacklist_resets and self.blacklist:
                     blacklist_resets += 1
                     rospy.logwarn(
-                        "Repeatedly stuck - clearing blacklist (reset %d/%d) and retrying.",
+                        "Repeatedly stuck - clearing blacklist (reset %d/%d).",
                         blacklist_resets, max_blacklist_resets)
                     self.blacklist = []
                     self.consecutive_stuck = 0
                     continue
-                rospy.logwarn("Repeatedly stuck - ending exploration.")
+                rospy.logwarn("Repeatedly stuck - ending center-scan.")
                 break
             if self.total_stuck >= self.global_max_stuck:
                 rospy.logwarn(
-                    "Hit global stuck limit (%d) - ending exploration.",
+                    "Hit global stuck limit (%d) - ending center-scan.",
                     self.global_max_stuck)
                 break
+
+    def _attempt_frontier_fallback(self, clearance, rx, ry):
+        """Last resort: one frontier goal when no interior center is reachable."""
+        cells = find_frontier_cells(self.map_msg)
+        clusters = cluster_frontier_cells(cells)
+        goals = []
+        for cluster in clusters:
+            if len(cluster) < self.min_frontier_cells:
+                continue
+            goal = frontier_goal_from_cluster(
+                self.map_msg, cluster, clearance_cells=clearance)
+            if goal is None:
+                continue
+            gx, gy, gyaw = goal
+            if self.is_blacklisted(gx, gy) or not self.within_bounds(gx, gy):
+                continue
+            goals.append((gx, gy, gyaw, len(cluster)))
+        if not goals:
+            return False
+        goals.sort(
+            key=lambda g: g[3] - self.distance_penalty * math.hypot(g[0] - rx, g[1] - ry),
+            reverse=True)
+        gx, gy, gyaw, _ = goals[0]
+        rospy.loginfo("Fallback frontier goal (%.2f, %.2f).", gx, gy)
+        if self.drive_to(gx, gy, facing=gyaw):
+            self.spin360("frontier-fallback-scan")
+            return True
+        return False
 
     def _map_base_path(self):
         if self.map_save_path:
@@ -1082,6 +820,13 @@ class StructuredMapper(object):
         self.set_state("done")
         self.client.cancel_all_goals()
         stop_robot(self.cmd_pub)
+        # Release cmd_vel so manual teleop has exclusive control (move_base
+        # would otherwise fight keyboard commands during manual mapping).
+        try:
+            subprocess.call(["rosnode", "kill", "/move_base"])
+            rospy.loginfo("move_base stopped for manual-mapping handoff.")
+        except (OSError, subprocess.SubprocessError):
+            pass
         ratio = self._current_unknown_ratio()
         self.unknown_pub.publish(Float32(data=ratio))
         self.frontier_pub.publish(Int32(data=0))
@@ -1103,18 +848,8 @@ class StructuredMapper(object):
         self.bootstrap()
         self.spin360("seed-spin")
         self.signal_started()
-
-        center = self.compute_room_center()
-        if center is not None:
-            self.set_state("go-to-center")
-            self.drive_to(center[0], center[1], timeout=self.per_goal_timeout * 1.5)
-        self.spin360("center-spin")
-
-        # Actively visit any pre-configured must-visit points before sweeping.
         self.service_visits()
-
-        self.perimeter_tour()
-        self.explore_frontiers()
+        self.center_scan_loop()
         self.finish()
 
 

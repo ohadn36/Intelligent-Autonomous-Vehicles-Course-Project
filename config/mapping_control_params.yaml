@@ -1,0 +1,6 @@
+# mapping_control.py — manual teleop after autonomous scan
+manual_linear: 0.45
+manual_angular: 0.9
+corridor_linear: 0.22
+corridor_front_min: 0.22
+scan_topic: /kobuki/laser/scan

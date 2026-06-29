@@ -5,14 +5,11 @@ Post-scan control hand-off (interactive).
 Flow:
   1. Wait until the autonomous scan reports complete (or its time cap).
   2. Ask: keep mapping MANUALLY (drive it yourself) or finish?
-       - YES -> built-in keyboard teleop; gmapping keeps building the map while
-                you drive. Press q (or Ctrl+C) to stop driving.
-       - NO  -> skip straight to saving.
   3. Save the map to maps/summit_world.{pgm,yaml}.
   4. (standalone mode) print how to start the navigation phase.
 
-Used both standalone and from run_demo.sh, which orchestrates the launches so
-everything happens in a single terminal.
+Manual driving suspends move_base (killed at handoff) so cmd_vel is exclusive.
+Press 'c' to toggle corridor-assist for narrow passages (e.g. kitchen entrance).
 """
 
 import os
@@ -22,9 +19,12 @@ import termios
 import threading
 import tty
 
+import actionlib
 import rospy
 import rospkg
 from geometry_msgs.msg import Twist
+from move_base_msgs.msg import MoveBaseAction
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
 
 try:
@@ -36,7 +36,11 @@ try:
 except Exception:
     pass
 
-from exploration_utils import resolve_cmd_vel_topic
+from exploration_utils import (
+    front_clearance,
+    resolve_cmd_vel_topic,
+    side_clearances,
+)
 
 PKG = "summit_xl_autonomous_nav"
 
@@ -47,9 +51,17 @@ class MappingControl(object):
         self.print_next_steps = rospy.get_param("~print_next_steps", True)
         self.manual_linear = rospy.get_param("~manual_linear", 0.4)
         self.manual_angular = rospy.get_param("~manual_angular", 0.9)
+        self.corridor_linear = rospy.get_param("~corridor_linear", 0.22)
+        self.corridor_front_min = rospy.get_param("~corridor_front_min", 0.22)
+        self.scan_topic = rospy.get_param("~scan_topic", "/kobuki/laser/scan")
+        self.latest_scan = None
         rospy.Subscriber(
             "/structured_mapper/complete", Bool,
             self._complete_cb, queue_size=1)
+        rospy.Subscriber(self.scan_topic, LaserScan, self._scan_cb, queue_size=1)
+
+    def _scan_cb(self, msg):
+        self.latest_scan = msg
 
     def _complete_cb(self, msg):
         if msg.data:
@@ -68,6 +80,21 @@ class MappingControl(object):
         while not rospy.is_shutdown() and not self.complete:
             rate.sleep()
 
+    def _ensure_move_base_stopped(self):
+        """Stop move_base so it cannot fight manual cmd_vel."""
+        try:
+            client = actionlib.SimpleActionClient("move_base", MoveBaseAction)
+            if client.wait_for_server(rospy.Duration(0.5)):
+                client.cancel_all_goals()
+        except Exception:
+            pass
+        try:
+            subprocess.call(["rosnode", "kill", "/move_base"])
+            rospy.sleep(0.4)
+            print("move_base stopped — you have full manual control.")
+        except (OSError, subprocess.SubprocessError):
+            pass
+
     def save_map(self):
         base = self._map_base()
         print("\nSaving map to %s.{pgm,yaml} ..." % base)
@@ -81,26 +108,41 @@ class MappingControl(object):
             print("Make sure gmapping is still running (it publishes /map).")
             return False
 
-    def manual_mapping(self):
-        """Built-in keyboard teleop so the user can drive while gmapping maps.
+    def _apply_corridor_twist(self, twist, linear_speed):
+        """Center in a narrow gap using left/right laser clearance."""
+        scan = self.latest_scan
+        if scan is None:
+            twist.linear.x = linear_speed
+            twist.angular.z = 0.0
+            return
+        left, right, front = side_clearances(scan)
+        if front < self.corridor_front_min:
+            twist.linear.x = 0.0
+            twist.angular.z = max(-0.4, min(0.4, 0.9 * (left - right)))
+            return
+        twist.linear.x = linear_speed
+        twist.angular.z = max(-0.35, min(0.35, 0.85 * (left - right)))
 
-        Runs in raw-tty mode, so Ctrl+C is read as a normal character (quit)
-        rather than a signal - the orchestrating shell is never interrupted.
-        """
+    def manual_mapping(self):
+        """Keyboard teleop while gmapping maps. 'c' = corridor-assist mode."""
+        self._ensure_move_base_stopped()
         topic = resolve_cmd_vel_topic()
         pub = rospy.Publisher(topic, Twist, queue_size=1)
         twist = Twist()
         state = {"running": True}
+        corridor_mode = {"on": False}
 
         def publish_loop():
-            rate = rospy.Rate(10)
+            rate = rospy.Rate(15)
             while state["running"] and not rospy.is_shutdown():
                 pub.publish(twist)
                 rate.sleep()
 
         print("\n=== MANUAL MAPPING (drive on %s) ===" % topic)
-        print("  i = forward   , = back   j = turn left   l = turn right")
-        print("  k or space = stop        q or Ctrl+C = finish driving")
+        print("  i = forward   , = back   j = left   l = right")
+        print("  k / space = stop")
+        print("  c = toggle CORRIDOR ASSIST (for narrow passages / kitchen)")
+        print("  q / Ctrl+C = finish manual mapping")
         print("gmapping keeps building the map as you drive.\n")
 
         thread = threading.Thread(target=publish_loop)
@@ -115,16 +157,30 @@ class MappingControl(object):
             tty.setraw(fd)
             while not rospy.is_shutdown():
                 ch = sys.stdin.read(1)
-                if ch in ("q", "\x03"):  # q or Ctrl+C
+                if ch in ("q", "\x03"):
                     break
+                if ch == "c":
+                    corridor_mode["on"] = not corridor_mode["on"]
+                    status = "ON (centering in gaps)" if corridor_mode["on"] else "OFF"
+                    print("\rCorridor assist: %s          " % status)
+                    continue
                 if ch == "i":
-                    twist.linear.x, twist.angular.z = lin, 0.0
+                    if corridor_mode["on"]:
+                        self._apply_corridor_twist(twist, self.corridor_linear)
+                    else:
+                        twist.linear.x, twist.angular.z = lin, 0.0
                 elif ch == ",":
-                    twist.linear.x, twist.angular.z = -lin, 0.0
+                    scan = self.latest_scan
+                    if scan is not None and front_clearance(scan) < 0.35:
+                        twist.linear.x, twist.angular.z = 0.0, 0.0
+                    else:
+                        twist.linear.x, twist.angular.z = -lin * 0.7, 0.0
                 elif ch == "j":
-                    twist.linear.x, twist.angular.z = 0.0, ang
+                    twist.linear.x = 0.0
+                    twist.angular.z = ang * (0.6 if corridor_mode["on"] else 1.0)
                 elif ch == "l":
-                    twist.linear.x, twist.angular.z = 0.0, -ang
+                    twist.linear.x = 0.0
+                    twist.angular.z = -ang * (0.6 if corridor_mode["on"] else 1.0)
                 elif ch in ("k", " "):
                     twist.linear.x, twist.angular.z = 0.0, 0.0
         finally:

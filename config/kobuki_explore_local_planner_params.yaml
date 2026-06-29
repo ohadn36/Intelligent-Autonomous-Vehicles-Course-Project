@@ -4,7 +4,7 @@
 # real-time on the shared CPU.
 DWAPlannerROS:
   # Fast forward travel during mapping...
-  max_vel_x: 0.65
+  max_vel_x: 0.70
   min_vel_x: 0.0
   # ...but rotation stays capped (<= ~0.9 rad/s): faster in-place turns out-run
   # gmapping's scan matcher on the shared CPU -> "Scan Matching Failed, using
@@ -13,7 +13,7 @@ DWAPlannerROS:
   max_vel_theta: 0.9
   min_vel_theta: -0.9
   min_in_place_vel_theta: 0.3
-  max_vel_trans: 0.65
+  max_vel_trans: 0.70
   min_vel_trans: 0.0
   acc_lim_x: 2.8
   acc_lim_y: 0.0

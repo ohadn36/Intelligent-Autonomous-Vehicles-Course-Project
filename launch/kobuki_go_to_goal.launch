@@ -23,8 +23,8 @@
     <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS"/>
     <rosparam file="$(find summit_xl_autonomous_nav)/config/move_base_params.yaml" command="load"/>
     <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_global_planner_params.yaml" command="load"/>
-    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_costmap_common_params.yaml" command="load" ns="global_costmap"/>
-    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_costmap_common_params.yaml" command="load" ns="local_costmap"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_nav_costmap_common_params.yaml" command="load" ns="global_costmap"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_nav_costmap_common_params.yaml" command="load" ns="local_costmap"/>
     <rosparam file="$(find summit_xl_autonomous_nav)/config/local_costmap_params.yaml" command="load"/>
     <rosparam file="$(find summit_xl_autonomous_nav)/config/global_costmap_params.yaml" command="load"/>
     <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_local_planner_params.yaml" command="load"/>
@@ -39,7 +39,9 @@
   </group>
 
   <node pkg="summit_xl_autonomous_nav" type="click_goal.py" name="click_goal" output="screen"
-        launch-prefix="bash -c 'sleep 6; exec $0 $@' "/>
+        launch-prefix="bash -c 'sleep 6; exec $0 $@' ">
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/click_goal_params.yaml" command="load"/>
+  </node>
   <node pkg="summit_xl_autonomous_nav" type="navigation_status.py" name="navigation_status" output="screen"/>
 
   <node pkg="rviz" type="rviz" name="rviz" args="-d $(find summit_xl_autonomous_nav)/config/click_navigation.rviz" required="false"/>
