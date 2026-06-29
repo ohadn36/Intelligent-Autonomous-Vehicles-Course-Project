@@ -150,6 +150,14 @@ class StructuredMapper(object):
         self.wall_near_clearance = rospy.get_param("~wall_near_clearance", 0.45)
         self.understand_wall_on_stuck = rospy.get_param("~understand_wall_on_stuck", True)
 
+        # Wall-follow recovery: when pinned at a wall with the goal far on the
+        # OTHER side, slide along the wall toward open space to find the real
+        # opening, instead of grinding straight into the wall.
+        self.wall_follow_on_stuck = rospy.get_param("~wall_follow_on_stuck", True)
+        self.wall_follow_speed = rospy.get_param("~wall_follow_speed", 0.14)
+        self.wall_follow_time = rospy.get_param("~wall_follow_time", 4.0)
+        self.wall_follow_goal_dist = rospy.get_param("~wall_follow_goal_dist", 1.5)
+
         # move_base server connection
         self.server_wait_timeout = rospy.get_param("~server_wait_timeout", 60.0)
         self.global_max_stuck = int(rospy.get_param("~global_max_stuck", 16))
@@ -419,20 +427,65 @@ class StructuredMapper(object):
             self.consecutive_stuck = 0
             self.mark_progress()
             return
-        # Otherwise, if we are nose-to-a-wall, back off a step and look at the
-        # wall so the next decision is informed (not a diagonal push into it).
-        scan = self.latest_scan
-        if (
-            self.understand_wall_on_stuck
-            and scan is not None
-            and front_clearance(scan) < self.wall_near_clearance
-        ):
-            self.understand_wall()
-        elif not self.escape_if_boxed_in():
-            self.unstick_rotate(x, y)
+        # Pinned at a wall with the goal far on the other side? Slide along the
+        # wall toward open space to discover the opening, then drop THIS goal so
+        # a reachable frontier is chosen next (avoids grinding into the wall).
+        followed = self._wall_follow_to_find_opening(x, y)
+        if not followed:
+            scan = self.latest_scan
+            if (
+                self.understand_wall_on_stuck
+                and scan is not None
+                and front_clearance(scan) < self.wall_near_clearance
+            ):
+                self.understand_wall()
+            elif not self.escape_if_boxed_in():
+                self.unstick_rotate(x, y)
         self.blacklist.append((x, y))
         self.consecutive_stuck += 1
         self.total_stuck += 1
+        if followed:
+            self.mark_progress()
+
+    def _wall_follow_to_find_opening(self, x, y):
+        """Slide toward the most open direction to find an opening in a wall.
+
+        Triggered when the robot is nose-to-a-wall but the goal is far beyond
+        it: the connecting doorway is somewhere ALONG the wall, so driving into
+        the wall never works. Turn to the most open bearing (tangential to the
+        wall / toward the opening) and creep there, laser-guarded and bounded.
+        Returns True if the robot moved.
+        """
+        if not self.wall_follow_on_stuck:
+            return False
+        scan = self.latest_scan
+        if scan is None:
+            return False
+        rxy = self.robot_xy()
+        if rxy is None:
+            return False
+        if math.hypot(x - rxy[0], y - rxy[1]) < self.wall_follow_goal_dist:
+            return False  # goal is near; this is not a cross-the-wall problem
+        if front_clearance(scan) >= self.wall_near_clearance:
+            return False  # not actually pinned against a wall
+        self.set_state("wall-follow")
+        rospy.loginfo("Pinned at a wall, goal is beyond it - following wall to find the opening.")
+        self.face_bearing_relative(best_open_bearing(self.latest_scan))
+        moved = False
+        end = rospy.Time.now() + rospy.Duration(self.wall_follow_time)
+        rate = rospy.Rate(10)
+        while not rospy.is_shutdown() and rospy.Time.now() < end:
+            scan = self.latest_scan
+            if scan is None or front_clearance(scan) < self.creep_min_front:
+                break
+            twist = Twist()
+            twist.linear.x = self.wall_follow_speed
+            self.cmd_pub.publish(twist)
+            moved = True
+            rate.sleep()
+        stop_robot(self.cmd_pub)
+        rospy.sleep(0.2)
+        return moved
 
     def _attempt_corridor_creep(self, x, y):
         """If a narrow passage leads toward (x,y), align and creep through it.

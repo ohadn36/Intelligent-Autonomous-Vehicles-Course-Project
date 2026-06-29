@@ -56,6 +56,13 @@ back_step_dist: 0.25          # how far to back off when reading a wall
 wall_near_clearance: 0.45     # front below this on a stuck goal => back+scan the wall
 understand_wall_on_stuck: true
 
+# Wall-follow recovery: when pinned at a wall with the goal far on the OTHER
+# side, slide along the wall toward open space to find the real opening.
+wall_follow_on_stuck: true
+wall_follow_speed: 0.14       # forward speed while following the wall (m/s)
+wall_follow_time: 4.0         # max seconds to follow before re-evaluating
+wall_follow_goal_dist: 1.5    # only wall-follow if the goal is farther than this (m)
+
 # move_base connection + global stuck cap
 server_wait_timeout: 60.0     # fail with a clear error if move_base never appears
 global_max_stuck: 16          # stop the whole tour after this many stuck goals total
