@@ -26,6 +26,7 @@ catkin_install_python(PROGRAMS
 
 install(PROGRAMS
   scripts/save_map.sh
+  scripts/run_demo.sh
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
