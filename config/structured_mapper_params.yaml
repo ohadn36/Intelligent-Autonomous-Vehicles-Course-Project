@@ -87,7 +87,9 @@ visit_timeout: 45.0           # max seconds to reach each must-visit point
 
 # Completion / coverage
 max_unknown_ratio: 0.10    # (used by exploration_monitor) save when unknown <= this
-max_runtime: 1800.0        # hard cap on total mapping time (s) - larger for outdoors
+max_runtime: 200.0         # hard cap on the autonomous scan (s); then hand off
+save_map_at_handoff: true  # save maps/summit_world.{pgm,yaml} when the scan ends
+map_save_path: ""          # "" = <pkg>/maps/summit_world
 min_frontier_cells: 6      # ignore tiny noise frontiers
 distance_penalty: 5.0      # frontier utility = cluster_size - penalty * distance
 frontier_scan_every: 4     # 360 scan every N reached frontiers (map new areas well)

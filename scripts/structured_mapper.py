@@ -29,6 +29,7 @@ Design guarantees:
 
 import math
 import os
+import subprocess
 import sys
 
 import actionlib
@@ -182,7 +183,12 @@ class StructuredMapper(object):
 
         # Completion / coverage
         self.max_unknown_ratio = rospy.get_param("~max_unknown_ratio", 0.10)
-        self.max_runtime = rospy.get_param("~max_runtime", 1800.0)
+        # Hard cap on the autonomous scan. After this (or when exploration ends
+        # earlier) control is handed back to the operator.
+        self.max_runtime = rospy.get_param("~max_runtime", 200.0)
+        # Save the map at hand-off so a map always exists for the next phase.
+        self.save_map_at_handoff = rospy.get_param("~save_map_at_handoff", True)
+        self.map_save_path = rospy.get_param("~map_save_path", "")
         self.min_frontier_cells = int(rospy.get_param("~min_frontier_cells", 6))
         self.distance_penalty = rospy.get_param("~distance_penalty", 5.0)
         # 360 scan every N reached frontiers so each new room / outdoor area is
@@ -1028,17 +1034,64 @@ class StructuredMapper(object):
                     self.global_max_stuck)
                 break
 
+    def _map_base_path(self):
+        if self.map_save_path:
+            return self.map_save_path
+        try:
+            import rospkg
+            pkg = rospkg.RosPack().get_path("summit_xl_autonomous_nav")
+            return os.path.join(pkg, "maps", "summit_world")
+        except Exception:
+            return "summit_world"
+
+    def _save_map(self):
+        base = self._map_base_path()
+        rospy.loginfo("Saving map to %s.{pgm,yaml} ...", base)
+        try:
+            subprocess.check_call(["rosrun", "map_server", "map_saver", "-f", base])
+            rospy.loginfo("Map saved.")
+            return True
+        except (subprocess.CalledProcessError, OSError) as exc:
+            rospy.logerr("map_saver failed: %s", exc)
+            return False
+
+    def _print_handoff_banner(self, ratio):
+        base = self._map_base_path()
+        rospy.logwarn(
+            "\n%s\n AUTONOMOUS SCAN DONE - control is now YOURS (unknown ~%.1f%%).\n"
+            " The robot is stopped; gmapping is still running so you can keep mapping.\n"
+            " Map saved to: %s.{pgm,yaml}\n%s\n"
+            " Choose the next step (run in a NEW terminal):\n"
+            "   rosrun summit_xl_autonomous_nav mapping_control.py\n"
+            " It will ask: keep mapping MANUALLY (drive it yourself) or finish.\n"
+            "   - YES -> teleop drive to any spots; gmapping maps them; then it saves.\n"
+            "   - NO  -> it saves the map and tells you how to start navigation.\n"
+            " Then, for autonomous go-to-point navigation:\n"
+            "   1) Ctrl+C this mapping launch.\n"
+            "   2) roslaunch summit_xl_autonomous_nav kobuki_go_to_goal.launch\n"
+            "   3) In RViz: 2D Pose Estimate, then 2D Nav Goal (or Publish Point).\n%s",
+            "=" * 70, ratio * 100.0, base, "-" * 70, "=" * 70)
+
     def finish(self):
+        """Hand control back to the operator (do NOT keep commanding the robot).
+
+        Stops the robot, saves the map so the next phase always has one, marks
+        complete, then stays alive (gmapping keeps running) so the operator can
+        either keep mapping manually via teleop or move on to navigation.
+        """
         self.set_state("done")
         self.client.cancel_all_goals()
         stop_robot(self.cmd_pub)
         ratio = self._current_unknown_ratio()
         self.unknown_pub.publish(Float32(data=ratio))
         self.frontier_pub.publish(Int32(data=0))
+        if self.save_map_at_handoff:
+            self._save_map()
         self.complete_pub.publish(Bool(data=True))
-        rospy.loginfo(
-            "Structured mapping complete. Unknown ~%.1f%%. Monitor will save the map.",
-            ratio * 100.0)
+        self.set_state("handoff")
+        self._print_handoff_banner(ratio)
+        # Stay alive but idle: the robot is stopped and we no longer publish
+        # cmd_vel, so manual teleop has full control while gmapping keeps mapping.
         rospy.spin()
 
     def run(self):

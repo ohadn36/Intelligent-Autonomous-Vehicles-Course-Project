@@ -1,11 +1,16 @@
 <?xml version="1.0"?>
 <launch>
   <!-- Structured autonomous mapping for Kobuki on The Construct.
-       gmapping (SLAM) + move_base (safe motion) + structured_mapper (the tour)
-       + exploration_monitor (auto-save). Start the course simulation first. -->
+       gmapping (SLAM) + move_base (safe motion) + structured_mapper (the tour).
+       The scan is capped (see max_runtime, default 200s); when it ends, the
+       mapper saves the map and hands control back to the operator - then run
+       `rosrun summit_xl_autonomous_nav mapping_control.py` to choose manual
+       mapping or go to the navigation phase. Start the course simulation first. -->
 
   <arg name="scan_topic" default="/kobuki/laser/scan"/>
-  <arg name="auto_save" default="true"/>
+  <!-- Off by default: the mapper saves the map itself at hand-off, so the
+       monitor is not needed (and avoids two nodes saving at once). -->
+  <arg name="auto_save" default="false"/>
 
   <!-- SLAM -->
   <include file="$(find summit_xl_autonomous_nav)/launch/includes/gmapping.launch">
