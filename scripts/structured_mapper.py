@@ -160,7 +160,7 @@ class StructuredMapper(object):
 
         # move_base server connection
         self.server_wait_timeout = rospy.get_param("~server_wait_timeout", 60.0)
-        self.global_max_stuck = int(rospy.get_param("~global_max_stuck", 16))
+        self.global_max_stuck = int(rospy.get_param("~global_max_stuck", 25))
 
         # Bootstrap
         self.bootstrap_clearance = rospy.get_param("~bootstrap_clearance", 0.35)
@@ -895,6 +895,8 @@ class StructuredMapper(object):
         last_ratio = 1.0
         last_improve = rospy.Time.now()
         reached = 0
+        blacklist_resets = 0
+        max_blacklist_resets = int(rospy.get_param("~max_blacklist_resets", 2))
 
         while not rospy.is_shutdown():
             if self.timed_out():
@@ -928,6 +930,10 @@ class StructuredMapper(object):
             gx, gy, gyaw, _ = goals[0]
             if self.drive_to(gx, gy, facing=gyaw):
                 reached += 1
+                # Reaching a new frontier IS progress. Reset the no-gain timer
+                # so a long transit across already-mapped space (e.g. driving
+                # to a far room like the kitchen) does not abort exploration.
+                last_improve = rospy.Time.now()
                 if reached % self.frontier_scan_every == 0:
                     self.spin360("frontier-scan")
 
@@ -937,12 +943,35 @@ class StructuredMapper(object):
                 last_ratio = ratio
                 last_improve = rospy.Time.now()
             elif (rospy.Time.now() - last_improve).to_sec() > self.global_progress_timeout:
+                # No coverage gain and not reaching frontiers for a long time.
+                # Before giving up, drop the blacklist a couple of times: a
+                # frontier (e.g. the kitchen) may have been blacklisted during
+                # an earlier stuck episode but be reachable now.
+                if blacklist_resets < max_blacklist_resets and self.blacklist:
+                    blacklist_resets += 1
+                    rospy.logwarn(
+                        "Stalled for %.0fs - clearing blacklist (reset %d/%d) and retrying.",
+                        self.global_progress_timeout, blacklist_resets, max_blacklist_resets)
+                    self.blacklist = []
+                    self.consecutive_stuck = 0
+                    last_improve = rospy.Time.now()
+                    continue
                 rospy.logwarn(
-                    "No coverage gain for %.0fs - ending exploration.",
+                    "No reachable progress for %.0fs - ending exploration.",
                     self.global_progress_timeout)
                 break
 
             if self.consecutive_stuck >= self.max_consecutive_stuck:
+                # Don't end outright - clear the blacklist once and keep trying
+                # so a far reachable room is not abandoned over local stalls.
+                if blacklist_resets < max_blacklist_resets and self.blacklist:
+                    blacklist_resets += 1
+                    rospy.logwarn(
+                        "Repeatedly stuck - clearing blacklist (reset %d/%d) and retrying.",
+                        blacklist_resets, max_blacklist_resets)
+                    self.blacklist = []
+                    self.consecutive_stuck = 0
+                    continue
                 rospy.logwarn("Repeatedly stuck - ending exploration.")
                 break
             if self.total_stuck >= self.global_max_stuck:

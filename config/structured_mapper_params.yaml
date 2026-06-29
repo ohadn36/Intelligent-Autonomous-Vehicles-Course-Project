@@ -65,7 +65,8 @@ wall_follow_goal_dist: 1.5    # only wall-follow if the goal is farther than thi
 
 # move_base connection + global stuck cap
 server_wait_timeout: 60.0     # fail with a clear error if move_base never appears
-global_max_stuck: 16          # stop the whole tour after this many stuck goals total
+global_max_stuck: 25          # stop the whole tour after this many stuck goals total
+max_blacklist_resets: 2       # times to clear the blacklist + retry before giving up
 
 # Bootstrap (handle a wall spawn before the tour begins)
 bootstrap_clearance: 0.35
