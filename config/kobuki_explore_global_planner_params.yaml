@@ -1,0 +1,11 @@
+# Global planner — prefer paths away from walls (less tight corners for DWA).
+NavfnROS:
+  allow_unknown: true
+  default_tolerance: 0.30
+  visualize_potential: false
+  use_dijkstra: true
+  old_navfn_behavior: false
+  lethal_cost: 253
+  neutral_cost: 80
+  cost_factor: 6.0
+  publish_scale: 100

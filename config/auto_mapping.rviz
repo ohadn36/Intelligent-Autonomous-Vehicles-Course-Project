@@ -1,0 +1,107 @@
+Panels:
+  - Class: rviz/Displays
+    Help Height: 78
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /LaserScan1
+        - /Map1
+        - /ExplorationFrontiers1
+      Splitter Ratio: 0.5
+    Tree Height: 450
+  - Class: rviz/Tool Properties
+    Expanded:
+      - /2D Pose Estimate1
+    Name: Tool Properties
+  - Class: rviz/Views
+    Expanded:
+      - /Current View1
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 1
+      Class: rviz/Grid
+      Color: 160; 160; 164
+      Enabled: true
+      Name: Grid
+      Plane: XY
+      Plane Cell Count: 30
+      Reference Frame: map
+    - Alpha: 1
+      Autocompute Value Bounds: true
+      Class: rviz/LaserScan
+      Color: 255; 100; 0
+      Decay Time: 0
+      Enabled: true
+      Name: LaserScan
+      Topic: /kobuki/laser/scan
+      Use Fixed Frame: true
+      Size: 0.05
+    - Alpha: 0.75
+      Class: rviz/Map
+      Color Scheme: map
+      Draw Behind: true
+      Enabled: true
+      Name: Map
+      Topic: /map
+    - Alpha: 1
+      Class: rviz/RobotModel
+      Enabled: true
+      Name: RobotModel
+    - Alpha: 1
+      Class: rviz/MarkerArray
+      Enabled: true
+      Name: ExplorationFrontiers
+      Topic: /explore/frontiers
+    - Alpha: 1
+      Class: rviz/Path
+      Color: 0; 255; 0
+      Enabled: true
+      Name: GlobalPlan
+      Topic: /move_base/NavfnROS/plan
+    - Alpha: 1
+      Class: rviz/Path
+      Color: 255; 0; 0
+      Enabled: true
+      Name: LocalPlan
+      Topic: /move_base/DWAPlannerROS/local_plan
+    - Alpha: 0.35
+      Class: rviz/Map
+      Color Scheme: costmap
+      Enabled: true
+      Name: GlobalCostmap
+      Topic: /move_base/global_costmap/costmap
+    - Class: rviz/TF
+      Enabled: false
+      Name: TF
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: map
+  Tools:
+    - Class: rviz/Interact
+      Hide Inactive Objects: true
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+    - Class: rviz/SetInitialPose
+      Topic: /initialpose
+  Views:
+    Current:
+      Angle: 0
+      Class: rviz/TopDownOrtho
+      Enable Stereo Rendering:
+        Value: false
+      Invert Z Axis: false
+      Name: TopDown
+      Near Clip Distance: 0.01
+      Scale: 45
+      Target Frame: map
+      Value: TopDownOrtho (map)
+      X: 0
+      Y: 0
+Window Geometry:
+  Height: 800
+  Width: 1200

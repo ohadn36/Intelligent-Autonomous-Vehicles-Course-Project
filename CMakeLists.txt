@@ -5,6 +5,8 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   std_msgs
   geometry_msgs
+  sensor_msgs
+  nav_msgs
   move_base_msgs
   actionlib
 )
@@ -12,7 +14,12 @@ find_package(catkin REQUIRED COMPONENTS
 catkin_package()
 
 catkin_install_python(PROGRAMS
-  scripts/waypoint_patrol.py
+  scripts/structured_mapper.py
+  scripts/exploration_monitor.py
+  scripts/exploration_utils.py
+  scripts/click_goal.py
+  scripts/navigation_status.py
+  scripts/set_initial_pose_from_odom.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

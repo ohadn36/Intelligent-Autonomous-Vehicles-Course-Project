@@ -2,8 +2,8 @@ min_particles: 100
 max_particles: 2000
 kld_err: 0.05
 kld_z: 0.99
-update_min_d: 0.2
-update_min_a: 0.5
+update_min_d: 0.1
+update_min_a: 0.2
 resample_interval: 1
 transform_tolerance: 1.0
 recovery_alpha_slow: 0.0

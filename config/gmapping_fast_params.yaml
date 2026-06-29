@@ -1,0 +1,12 @@
+# Reliable SLAM on a shared/limited CPU. The previous "max speed" profile
+# (10 Hz map, 80 particles, scan every 2 cm / 1 deg) STARVED the CPU: the DWA
+# control loop and TF fell behind, and gmapping processed scans so late that
+# the robot rotated 1-2 rad between updates -> scan-match failures -> map drift
+# -> the robot planned "through" objects. Lighter settings keep gmapping in
+# real time, which maps FASTER overall (no drift, no re-scanning).
+map_update_interval: 0.5     # publish /map ~2x per second (plenty for frontiers)
+linearUpdate: 0.10           # register a scan every 10 cm of travel
+angularUpdate: 0.10          # and every ~5.7 deg of rotation
+temporalUpdate: 1.0          # plus at least every 1 s when still
+iterations: 5                # scan-matcher iterations (accuracy)
+particles: 30                # enough for an indoor room; far lighter than 80

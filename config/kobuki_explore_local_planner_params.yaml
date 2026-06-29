@@ -1,0 +1,39 @@
+# DWA during exploration — brisk forward travel, but rotation is CAPPED so
+# gmapping can match scans while turning (fast spins caused scan-match failures
+# and map drift). Trajectory sample count is cut ~4x to keep the control loop
+# real-time on the shared CPU.
+DWAPlannerROS:
+  max_vel_x: 0.55
+  min_vel_x: 0.0
+  max_vel_theta: 1.0
+  min_vel_theta: -1.0
+  min_in_place_vel_theta: 0.4
+  max_vel_trans: 0.55
+  min_vel_trans: 0.0
+  acc_lim_x: 2.5
+  acc_lim_y: 0.0
+  acc_lim_theta: 2.5
+
+  xy_goal_tolerance: 0.18
+  yaw_goal_tolerance: 0.35
+  latch_xy_goal_tolerance: false
+
+  sim_time: 2.0
+  sim_granularity: 0.05
+  angular_sim_granularity: 0.10
+  vx_samples: 10
+  vy_samples: 1
+  vtheta_samples: 20
+
+  path_distance_bias: 24.0
+  goal_distance_bias: 28.0
+  occdist_scale: 1.4
+
+  forward_point_distance: 0.12
+  stop_time_buffer: 0.20
+  scaling_speed: 0.35
+  max_scaling_factor: 0.30
+  prune_plan: true
+
+  holonomic_robot: false
+  escape_vel: -0.10

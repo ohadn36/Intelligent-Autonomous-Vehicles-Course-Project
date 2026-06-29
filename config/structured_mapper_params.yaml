@@ -1,0 +1,76 @@
+# Structured mapper - deliberate "guided tour" autonomous mapping profile.
+# The robot maps walls from a comfortable standoff (never hugs them), sweeps
+# the perimeter in order, enters each side room to scan it, then mops up any
+# leftover unknown. All point-to-point motion goes through move_base.
+
+# Frames / topics (scan_topic is overridden by the launch arg)
+map_frame: map
+base_frame: base_footprint
+scan_topic: /kobuki/laser/scan
+cmd_vel_topic: ""          # "" = auto-resolve (/cmd_vel, /mobile_base/..., /kobuki/...)
+
+# Perimeter sweep + ray-cast room analysis
+wall_standoff: 0.80        # keep this far from walls while sweeping (map them from here)
+waypoint_spacing: 0.6      # distance between perimeter waypoints (smooth, not crawling)
+ray_count: 72              # rays for center/perimeter/opening analysis (every 5 deg)
+max_ray: 12.0              # match the laser/gmapping max range
+occupied_value: 65         # occupancy-grid value treated as a wall
+
+# 360 spins (capped <= 1.0 rad/s so gmapping matches scans while turning)
+spin_speed: 0.9
+spin_steps: 6              # 6 x 60 deg with a pause between -> clean 360 scan
+spin_pause: 0.4
+
+# Goal placement / opening + pocket geometry
+goal_min_clearance: 0.30   # never place a goal closer than this to any obstacle
+opening_min_width: 0.6     # ignore gaps narrower than this when detecting rooms
+narrow_passage_width: 0.78 # at/below this width, cross with laser-centered creep
+pocket_clearance: 0.45     # left AND right below this => corridor/pocket
+deadend_front: 0.35        # pocket AND front below this => dead end, do not enter
+approach_standoff: 0.8     # stop this far in front of a doorway before entering
+enter_depth: 0.9           # how far past the threshold to aim when entering a room
+
+# Watchdogs / anti-stuck (so it never stalls on an unreachable point)
+per_goal_timeout: 14.0     # abandon a move_base goal that makes no progress
+min_travel: 0.12           # less travel than this during a goal = "stuck"
+max_consecutive_stuck: 4   # stop cleanup after this many stuck goals in a row
+blacklist_radius: 0.40     # don't re-target within this radius of a failed goal
+global_progress_timeout: 90.0  # end cleanup if unknown % stops dropping for this long
+opening_visited_radius: 1.0    # treat openings within this radius as already visited
+
+# Escape (reverse out of a wedge) + creep (slow centered passage)
+escape_clearance: 0.30
+escape_back_speed: 0.12
+escape_back_time: 1.5
+creep_speed: 0.10
+creep_duration: 4.0
+creep_min_front: 0.24
+
+# Reverse safety + "understand the wall" behavior
+rear_safe_clearance: 0.35     # never reverse unless the rear is clear by this much
+back_step_dist: 0.25          # how far to back off when reading a wall
+wall_near_clearance: 0.45     # front below this on a stuck goal => back+scan the wall
+understand_wall_on_stuck: true
+
+# move_base connection + global stuck cap
+server_wait_timeout: 60.0     # fail with a clear error if move_base never appears
+global_max_stuck: 8           # stop the whole tour after this many stuck goals total
+
+# Bootstrap (handle a wall spawn before the tour begins)
+bootstrap_clearance: 0.35
+bootstrap_forward_clearance: 0.85
+bootstrap_forward_speed: 0.25
+
+# Completion / cleanup
+max_unknown_ratio: 0.10    # consider the room mapped when unknown <= this (in bbox)
+max_runtime: 1200.0        # hard cap on total mapping time (s)
+min_frontier_cells: 6      # ignore tiny noise frontiers in the cleanup phase
+distance_penalty: 5.0      # cleanup utility = cluster_size - penalty * distance
+
+# Optional virtual boundary - planar LiDAR cannot see drop-offs/stairs.
+# Enable and set the box (meters, map frame) to keep the robot inside a region.
+explore_bounds_enabled: false
+explore_min_x: -100.0
+explore_max_x: 100.0
+explore_min_y: -100.0
+explore_max_y: 100.0

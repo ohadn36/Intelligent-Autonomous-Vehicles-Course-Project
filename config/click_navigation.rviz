@@ -1,0 +1,95 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+  - Class: rviz/Tool Properties
+    Expanded:
+      - /Publish Point1
+      - /2D Pose Estimate1
+      - /2D Nav Goal1
+    Name: Tool Properties
+  - Class: rviz/Views
+    Name: Views
+Visualization Manager:
+  Displays:
+    - Class: rviz/Grid
+      Enabled: true
+      Name: Grid
+      Reference Frame: map
+    - Class: rviz/LaserScan
+      Enabled: true
+      Name: LaserScan
+      Topic: /kobuki/laser/scan
+      Size: 0.05
+      Decay Time: 0
+      Use Fixed Frame: true
+    - Class: rviz/Map
+      Enabled: true
+      Name: Map
+      Topic: /map
+      Alpha: 0.7
+    - Class: rviz/RobotModel
+      Enabled: true
+      Name: RobotModel
+    - Class: rviz/Path
+      Enabled: true
+      Name: GlobalPlan
+      Topic: /move_base/NavfnROS/plan
+      Color: 0; 255; 0
+    - Class: rviz/Path
+      Enabled: true
+      Name: LocalPlan
+      Topic: /move_base/DWAPlannerROS/local_plan
+      Color: 255; 0; 0
+    - Class: rviz/Map
+      Enabled: true
+      Name: LocalCostmap
+      Topic: /move_base/local_costmap/costmap
+      Alpha: 0.4
+      Color Scheme: costmap
+    - Class: rviz/Map
+      Enabled: true
+      Name: GlobalCostmap
+      Topic: /move_base/global_costmap/costmap
+      Alpha: 0.3
+      Color Scheme: costmap
+    - Class: rviz/PoseArray
+      Enabled: false
+      Name: AMCL_Particles
+      Topic: /particlecloud
+    - Class: rviz/TF
+      Enabled: true
+      Name: TF
+  Global Options:
+    Fixed Frame: map
+  Tools:
+    - Class: rviz/Interact
+      Hide Inactive Objects: true
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+    - Class: rviz/SetInitialPose
+      Theta std deviation: 0.2617993950843811
+      Topic: /initialpose
+      X std deviation: 0.5
+      Y std deviation: 0.5
+    - Class: rviz/SetGoal
+      Topic: /move_base_simple/goal
+    - Class: rviz/PublishPoint
+      Single click: true
+      Topic: /clicked_point
+  Views:
+    Current:
+      Angle: 0
+      Class: rviz/TopDownOrtho
+      Enable Stereo Rendering:
+        Value: false
+      Invert Z Axis: false
+      Name: TopDown
+      Near Clip Distance: 0.01
+      Scale: 50
+      Target Frame: map
+      Value: TopDownOrtho (map)
+      X: 0
+      Y: 0
+Window Geometry:
+  Height: 800
+  Width: 1200

@@ -1,0 +1,30 @@
+# move_base during autonomous mapping. Rates are deliberately LOW: on the
+# shared Construct CPU, gmapping + costmaps + DWA together starved the TF
+# publish thread, so the map->odom transform lagged and the local planner
+# spammed "Could not transform the global plan" / "Could not get local plan"
+# and the robot stalled. 5 Hz control + 1 Hz replanning frees enough CPU for
+# gmapping to keep map->odom fresh, which keeps DWA producing a local plan.
+controller_frequency: 5.0
+controller_patience: 8.0
+planner_frequency: 0.5
+planner_patience: 6.0
+conservative_reset_dist: 2.0
+recovery_behavior_enabled: true
+clearing_rotation_allowed: true
+shutdown_costmaps: false
+oscillation_timeout: 8.0
+oscillation_distance: 0.20
+
+recovery_behaviors:
+  - name: rotate_recovery
+    type: rotate_recovery/RotateRecovery
+  - name: conservative_reset
+    type: clear_costmap_recovery/ClearCostmapRecovery
+  - name: aggressive_reset
+    type: clear_costmap_recovery/ClearCostmapRecovery
+
+conservative_reset:
+  reset_distance: 2.0
+
+aggressive_reset:
+  reset_distance: 0.5

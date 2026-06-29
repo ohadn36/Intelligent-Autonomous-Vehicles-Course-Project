@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- Navigation for Kobuki — no simulation launch (sim already running) -->
+  <arg name="map_file" default="$(find summit_xl_autonomous_nav)/maps/summit_world.yaml"/>
+  <arg name="scan_topic" default="/kobuki/laser/scan"/>
+
+  <node pkg="map_server" type="map_server" name="map_server" args="$(arg map_file)"/>
+
+  <node pkg="amcl" type="amcl" name="amcl" output="screen">
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/amcl_params.yaml" command="load"/>
+    <remap from="scan" to="$(arg scan_topic)"/>
+  </node>
+
+  <node pkg="move_base" type="move_base" name="move_base" output="screen">
+    <param name="base_global_planner" value="navfn/NavfnROS"/>
+    <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/move_base_params.yaml" command="load"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_global_planner_params.yaml" command="load"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_costmap_common_params.yaml" command="load" ns="global_costmap"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_costmap_common_params.yaml" command="load" ns="local_costmap"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/local_costmap_params.yaml" command="load"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/global_costmap_params.yaml" command="load"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_local_planner_params.yaml" command="load"/>
+    <!-- Single source of truth: drive the costmap laser topic from scan_topic. -->
+    <param name="global_costmap/laser_scan_sensor/topic" value="$(arg scan_topic)"/>
+    <param name="local_costmap/laser_scan_sensor/topic" value="$(arg scan_topic)"/>
+  </node>
+
+  <node pkg="rviz" type="rviz" name="rviz" args="-d $(find summit_xl_autonomous_nav)/config/navigation.rviz" required="false"/>
+</launch>

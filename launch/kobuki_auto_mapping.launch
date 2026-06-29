@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- Structured autonomous mapping for Kobuki on The Construct.
+       gmapping (SLAM) + move_base (safe motion) + structured_mapper (the tour)
+       + exploration_monitor (auto-save). Start the course simulation first. -->
+
+  <arg name="scan_topic" default="/kobuki/laser/scan"/>
+  <arg name="auto_save" default="true"/>
+
+  <!-- SLAM -->
+  <include file="$(find summit_xl_autonomous_nav)/launch/includes/gmapping.launch">
+    <arg name="scan_topic" value="$(arg scan_topic)"/>
+  </include>
+  <rosparam file="$(find summit_xl_autonomous_nav)/config/gmapping_fast_params.yaml"
+            command="load" ns="slam_gmapping"/>
+
+  <!-- move_base: every point-to-point move goes through here, so the costmap
+       guarantees the robot never drives through walls or obstacles. -->
+  <node pkg="move_base" type="move_base" name="move_base" output="screen">
+    <param name="base_global_planner" value="navfn/NavfnROS"/>
+    <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_explore_move_base_params.yaml" command="load"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_explore_global_planner_params.yaml" command="load"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_explore_costmap_common_params.yaml" command="load" ns="global_costmap"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_explore_costmap_common_params.yaml" command="load" ns="local_costmap"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_explore_global_costmap_params.yaml" command="load"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_explore_local_costmap_params.yaml" command="load"/>
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/kobuki_explore_local_planner_params.yaml" command="load"/>
+    <!-- Single source of truth: drive the costmap laser topic from scan_topic. -->
+    <param name="global_costmap/laser_scan_sensor/topic" value="$(arg scan_topic)"/>
+    <param name="local_costmap/laser_scan_sensor/topic" value="$(arg scan_topic)"/>
+  </node>
+
+  <!-- The structured tour (bootstrap is folded in; no launch-ordering hacks). -->
+  <node pkg="summit_xl_autonomous_nav" type="structured_mapper.py" name="structured_mapper" output="screen">
+    <rosparam file="$(find summit_xl_autonomous_nav)/config/structured_mapper_params.yaml" command="load"/>
+    <param name="scan_topic" value="$(arg scan_topic)"/>
+  </node>
+
+  <!-- Auto-save the map when coverage is good enough. -->
+  <group if="$(arg auto_save)">
+    <node pkg="summit_xl_autonomous_nav" type="exploration_monitor.py" name="exploration_monitor" output="screen">
+      <param name="max_unknown_ratio" value="0.10"/>
+      <param name="startup_grace" value="20.0"/>
+      <param name="stable_seconds" value="12.0"/>
+    </node>
+  </group>
+
+  <node pkg="rviz" type="rviz" name="rviz"
+        args="-d $(find summit_xl_autonomous_nav)/config/auto_mapping.rviz" required="false"/>
+</launch>

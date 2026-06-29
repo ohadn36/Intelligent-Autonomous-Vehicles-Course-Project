@@ -1,0 +1,11 @@
+# Global planner — shortest path around obstacles on the saved map.
+NavfnROS:
+  allow_unknown: false
+  default_tolerance: 0.0
+  visualize_potential: false
+  use_dijkstra: true
+  old_navfn_behavior: false
+  lethal_cost: 253
+  neutral_cost: 66
+  cost_factor: 3.0
+  publish_scale: 100

@@ -1,0 +1,28 @@
+# Compact footprint (robot ~0.28 m wide) with enough inflation to give DWA a
+# real cost gradient near walls/furniture. 0.16 m was too tight: DWA found no
+# clear trajectory near obstacles ("failed to produce path") and clipped
+# furniture. 0.25 m still passes ~0.8 m doorways (inflation is a soft gradient,
+# not a hard block).
+obstacle_range: 5.0
+raytrace_range: 6.0
+footprint: [[0.14, -0.11], [0.14, 0.11], [-0.14, 0.11], [-0.14, -0.11]]
+footprint_padding: 0.02
+inflation_radius: 0.25
+cost_scaling_factor: 3.0
+
+observation_sources: laser_scan_sensor
+
+laser_scan_sensor:
+  # No sensor_frame: costmap_2d reads the frame from the LaserScan header.
+  # The topic is the single source of truth, overridden from the launch
+  # `scan_topic` arg.
+  data_type: LaserScan
+  topic: /kobuki/laser/scan
+  marking: true
+  clearing: true
+  inf_is_valid: false
+  min_obstacle_height: 0.0
+  max_obstacle_height: 2.0
+  obstacle_range: 5.0
+  raytrace_range: 6.0
+  expected_update_rate: 0.0
