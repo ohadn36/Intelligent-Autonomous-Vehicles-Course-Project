@@ -45,8 +45,8 @@ class MappingControl(object):
     def __init__(self):
         self.complete = False
         self.print_next_steps = rospy.get_param("~print_next_steps", True)
-        self.manual_linear = rospy.get_param("~manual_linear", 0.2)
-        self.manual_angular = rospy.get_param("~manual_angular", 0.5)
+        self.manual_linear = rospy.get_param("~manual_linear", 0.4)
+        self.manual_angular = rospy.get_param("~manual_angular", 0.9)
         rospy.Subscriber(
             "/structured_mapper/complete", Bool,
             self._complete_cb, queue_size=1)

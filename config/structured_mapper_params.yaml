@@ -16,10 +16,11 @@ ray_count: 72              # rays for center/perimeter/opening analysis (every 5
 max_ray: 12.0              # match the laser/gmapping max range
 occupied_value: 65         # occupancy-grid value treated as a wall
 
-# 360 spins (capped <= 1.0 rad/s so gmapping matches scans while turning)
-spin_speed: 0.9
-spin_steps: 6              # 6 x 60 deg with a pause between -> clean 360 scan
-spin_pause: 0.4
+# 360 spins (capped <= 1.0 rad/s so gmapping matches scans while turning).
+# Fewer, faster steps = quicker 360 while still scan-safe.
+spin_speed: 1.0
+spin_steps: 4              # 4 x 90 deg with a short pause -> faster clean 360
+spin_pause: 0.25
 
 # Goal placement / opening + pocket geometry
 goal_min_clearance: 0.30   # never place a goal closer than this to any obstacle
@@ -59,7 +60,7 @@ understand_wall_on_stuck: true
 # Wall-follow recovery: when pinned at a wall with the goal far on the OTHER
 # side, slide along the wall toward open space to find the real opening.
 wall_follow_on_stuck: true
-wall_follow_speed: 0.14       # forward speed while following the wall (m/s)
+wall_follow_speed: 0.22       # forward speed while following the wall (m/s)
 wall_follow_time: 4.0         # max seconds to follow before re-evaluating
 wall_follow_goal_dist: 1.5    # only wall-follow if the goal is farther than this (m)
 
@@ -71,7 +72,7 @@ max_blacklist_resets: 2       # times to clear the blacklist + retry before givi
 # Bootstrap (handle a wall spawn before the tour begins)
 bootstrap_clearance: 0.35
 bootstrap_forward_clearance: 0.85
-bootstrap_forward_speed: 0.25
+bootstrap_forward_speed: 0.45
 
 # Must-visit points - the robot actively drives to each at least once and
 # scans it, independent of frontier coverage, so a known area is never missed.
