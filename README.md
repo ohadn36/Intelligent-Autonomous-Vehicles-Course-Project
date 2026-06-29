@@ -1,167 +1,169 @@
-# Summit XL Autonomous Navigation
+# ניווט אוטונומי — Kobuki (The Construct)
 
-Autonomous waypoint navigation project for an **Autonomous Vehicles** academic course.
+פרויקט לקורס **Autonomous Vehicles**: רובוט Kobuki בונה מפה, מתמקם, ומנווט לנקודת יעד בודדת תוך הימנעות ממכשולים.
 
-The robot uses the classic ROS Navigation Stack:
-- **gmapping** for SLAM (map building)
-- **AMCL** for localization
-- **move_base** for global/local planning and obstacle avoidance
-- **waypoint_patrol.py** for multi-goal autonomous patrol
+**סביבה:** [The Construct ROSDS](https://app.theconstructsim.com/) — ROS 1 Noetic, סימולציית Kobuki + RViz.  
+**מחסנית:** gmapping (SLAM) · AMCL · move_base (navfn + DWA).
 
-Built to run inside [The Construct ROSDS](https://app.theconstructsim.com/desktop/course/57) with **Summit XL** in Gazebo + RViz.
+> שם החבילה `summit_xl_autonomous_nav` נשמר מסיבות היסטוריות; הקוד מותאם ל-**Kobuki**, לא ל-Summit XL.
 
-## Project demo flow
+## זרימת הדמו (definition of done)
 
-1. Build a map by driving Summit XL with keyboard teleop while gmapping runs
-2. Save the map to `maps/summit_world.yaml` + `maps/summit_world.pgm`
-3. Launch navigation (map_server + AMCL + move_base)
-4. Send goals manually in RViz **or** run automatic waypoint patrol
+1. הפעלת סימולציית הקורס ב-The Construct.
+2. **מיפוי אוטומטי** — הרובוט סורק את החדר (מרכזי שטח פתוח + סיבוב 360°), עד ~200 שניות או כיסוי מלא.
+3. (אופציונלי) **מיפוי ידני** — שליטה במקלדת לתיקון/השלמת אזורים (למשל מטבח).
+4. **שמירת מפה** — `maps/summit_world.pgm` + `maps/summit_world.yaml`.
+5. **ניווט** — טעינת המפה (map_server + AMCL + move_base).
+6. **יעד ב-RViz** — Publish Point (או 2D Nav Goal); הרובוט מתכנן מסלול ומגיע.
+7. **איכות:** במעבר צר / ס-around אי — לא נסיעה בקו ישר דרך קיר; שימוש במפה + navfn (גלובלי) + DWA (מקומי).
 
-## Repository structure
+Patrol / multi-waypoint **לא** ב-scope — דמו של יעד בודד.
 
-```
-summit_xl_autonomous_nav/
-├── launch/
-│   ├── summit_xl_mapping.launch          # Gazebo + gmapping + teleop
-│   ├── summit_xl_mapping_no_sim.launch   # gmapping only (sim already running)
-│   ├── summit_xl_navigation.launch       # AMCL + move_base
-│   └── summit_xl_patrol.launch           # navigation + patrol script
-├── config/                               # costmaps, AMCL, move_base params
-├── maps/                                 # saved occupancy grid map
-├── scripts/
-│   ├── waypoint_patrol.py                # actionlib multi-goal client
-│   └── check_environment.sh              # verify ROSDS packages
-└── docs/                                 # presentation + theory document
-```
+## הרצה מהירה (מומלץ)
 
-## Setup in The Construct (ROSDS)
-
-### Step 1 — Open the environment
-
-1. Log in to [The Construct](https://app.theconstructsim.com/)
-2. Open course **ROS Navigation in 5 Days** or any ROS Noetic simulation desktop
-3. Open a **Terminal**
-
-### Step 2 — Clone and build
+טרמינל אחד — הסקריפט מנהל מיפוי, hand-off, וניווט:
 
 ```bash
-cd ~/catkin_ws/src   # or ~/ros_ws/src if that's your workspace
-git clone https://github.com/YOUR_USERNAME/summit_xl_autonomous_nav.git
+source ~/catkin_ws/devel/setup.bash
+rosrun summit_xl_autonomous_nav run_demo.sh
+```
+
+1. **שלב 1** — מיפוי אוטומטי (`kobuki_auto_mapping.launch` ברקע).
+2. **שלב 2** — `mapping_control.py` שואל: מיפוי ידני (`y`) או סיום (`n`); שומר את המפה.
+3. **שלב 3** — ניווט (`kobuki_go_to_goal.launch`).
+
+ב-RViz: **2D Pose Estimate** (אם צריך), затן **Publish Point** על המפה.
+
+## התקנה ב-The Construct
+
+```bash
+cd ~/catkin_ws/src
+git clone https://github.com/ohadn36/autonomous-navigation-ros.git summit_xl_autonomous_nav
 cd ~/catkin_ws
 catkin_make
 source devel/setup.bash
 ```
 
-If you don't have a workspace yet:
+אם אין workspace:
 
 ```bash
-mkdir -p ~/catkin_ws/src
-cd ~/catkin_ws/src
-git clone https://github.com/YOUR_USERNAME/summit_xl_autonomous_nav.git
-cd ~/catkin_ws
-catkin_make
+mkdir -p ~/catkin_ws/src && cd ~/catkin_ws/src
+git clone https://github.com/ohadn36/autonomous-navigation-ros.git summit_xl_autonomous_nav
+cd ~/catkin_ws && catkin_make
 echo "source ~/catkin_ws/devel/setup.bash" >> ~/.bashrc
 source devel/setup.bash
 ```
 
-### Step 3 — Check packages
+## הרצה שלב-שלב
+
+### א. מיפוי אוטומטי
 
 ```bash
-rosrun summit_xl_autonomous_nav check_environment.sh
+roslaunch summit_xl_autonomous_nav kobuki_auto_mapping.launch
 ```
 
-If `summit_xl_sim_bringup` is missing, install Robotnik packages:
+`structured_mapper.py` — נסיעה למרכזי שטח פתוח, סיבוב 360°, `move_base` למניעת התנגשות.  
+פרמטרים: `config/structured_mapper_params.yaml` (זמן מקסימלי, `corridor_zones` למטבח).
+
+### ב. Hand-off + מיפוי ידני (אופציונלי)
 
 ```bash
-cd ~/catkin_ws/src
-git clone -b kinetic-devel https://github.com/RobotnikAutomation/summit_xl_common.git
-git clone -b kinetic-devel https://github.com/RobotnikAutomation/summit_xl_sim.git
-cd ~/catkin_ws && rosdep install --from-paths src --ignore-src -r -y
-catkin_make && source devel/setup.bash
+rosrun summit_xl_autonomous_nav mapping_control.py
 ```
 
-> On Noetic, try branch `melodic-devel` or `noetic-devel` if available.
+| מקש | פעולה |
+|-----|--------|
+| `i` / `,` | קדימה / אחורה |
+| `j` / `l` | סיבוב |
+| `k` | עצירה |
+| `c` | corridor-assist (יישור במעבר צר) |
 
-## Run instructions
-
-### A) Mapping (create the map)
-
-**Option 1 — start simulation yourself:**
-
-```bash
-roslaunch summit_xl_autonomous_nav summit_xl_mapping.launch
-```
-
-**Option 2 — simulation already running (course sim):**
+### ג. שמירת מפה
 
 ```bash
-roslaunch summit_xl_autonomous_nav summit_xl_mapping_no_sim.launch
-```
-
-In the teleop terminal:
-- `i` = forward, `,` = backward
-- `j` / `l` = rotate
-- `k` = stop
-
-Drive around the entire environment until the map in RViz looks complete.
-
-**Save the map** (new terminal):
-
-```bash
-source ~/catkin_ws/devel/setup.bash
+rosrun summit_xl_autonomous_nav save_map.sh
+# או:
 rosrun map_server map_saver -f $(rospack find summit_xl_autonomous_nav)/maps/summit_world
 ```
 
-This creates `maps/summit_world.yaml` and `maps/summit_world.pgm`.
-
-### B) Navigation (manual goals)
+### ד. ניווט (יעד בודד)
 
 ```bash
-roslaunch summit_xl_autonomous_nav summit_xl_navigation.launch
+roslaunch summit_xl_autonomous_nav kobuki_go_to_goal.launch
 ```
 
-In RViz:
-1. Set **Fixed Frame** = `map`
-2. Add displays: Map, LaserScan (`/scan`), RobotModel, Path
-3. Click **2D Pose Estimate** to set initial robot pose
-4. Click **2D Nav Goal** to send a navigation goal
+- `click_goal.py` — Publish Point → move_base; stuck recovery במעברים צרים.
+- `set_initial_pose_from_odom.py` — pose ראשוני אוטומטי (ניתן לכבות: `auto_localize:=false`).
 
-### C) Autonomous patrol (for demo video)
-
-1. Edit waypoint coordinates in `scripts/waypoint_patrol.py` based on your saved map
-2. Run:
+ניווט בלי click_goal (רק move_base + RViz 2D Nav Goal):
 
 ```bash
-roslaunch summit_xl_autonomous_nav summit_xl_patrol.launch
+roslaunch summit_xl_autonomous_nav kobuki_navigation.launch
 ```
 
-The robot will visit each waypoint automatically.
+## מבנה הפרויקט
 
-## Troubleshooting
+```
+summit_xl_autonomous_nav/
+├── launch/
+│   ├── kobuki_auto_mapping.launch   # gmapping + move_base + structured_mapper
+│   ├── kobuki_go_to_goal.launch     # map_server + AMCL + move_base + click_goal
+│   ├── kobuki_navigation.launch     # ניווט בסיסי (ללא click_goal)
+│   └── includes/gmapping.launch
+├── config/
+│   ├── structured_mapper_params.yaml
+│   ├── click_goal_params.yaml       # stuck recovery
+│   ├── kobuki_nav_costmap_common_params.yaml
+│   └── kobuki_explore_*.yaml        # costmaps/planner למיפוי
+├── maps/                            # summit_world.pgm + .yaml
+└── scripts/
+    ├── run_demo.sh                  # דמו end-to-end
+    ├── structured_mapper.py
+    ├── mapping_control.py
+    ├── click_goal.py
+    ├── exploration_utils.py
+    └── save_map.sh
+```
 
-| Problem | Fix |
-|---------|-----|
-| No `/scan` topic | Check `rostopic list`, set `scan_topic:=merged_scan` in launch |
-| Map is empty in RViz | Set Fixed Frame to `map`, drive robot to update SLAM |
-| AMCL particles spread | Use **2D Pose Estimate** in RViz near robot's real position |
-| Robot doesn't move | Check `rostopic echo /cmd_vel` and `move_base/status` |
-| `summit_xl_sim_bringup` not found | Clone Robotnik repos (see Step 3) |
+## פרמטרים חשובים
 
-## Course deliverables checklist
+| נושא | קובץ | ברירת מחדל |
+|------|------|------------|
+| Laser | launch / params | `/kobuki/laser/scan` |
+| זמן מיפוי מקסימלי | `structured_mapper_params.yaml` | ~200 s |
+| Inflation (ניווט) | `kobuki_nav_costmap_common_params.yaml` | נמוך יותר למעברים צרים |
+| Stuck recovery | `click_goal_params.yaml` | watchdog + back/align/creep |
 
-- [ ] PowerPoint presentation (10-12 slides) with GitHub + video links on slide 11
-- [ ] Theory document (5-7 pages)
-- [ ] Demo recording (5-12 min) showing mapping + navigation + patrol
-- [ ] This GitHub repository
-- [ ] Project Summary form
+נושא laser שונה:
 
-## References
+```bash
+roslaunch summit_xl_autonomous_nav kobuki_go_to_goal.launch scan_topic:=/your/scan
+```
+
+## פתרון תקלות
+
+| בעיה | פתרון |
+|------|--------|
+| אין `/kobuki/laser/scan` | `rostopic list`; העבר `scan_topic:=...` ב-launch |
+| מפה ריקה ב-RViz | Fixed Frame = `map`; המתן ל-gmapping / AMCL |
+| חלקיקי AMCL מפוזרים | **2D Pose Estimate** ליד מיקום הרובוט |
+| הרובוט לא זז | `rostopic echo /cmd_vel`; `rostopic echo /move_base/status` |
+| תקוע במעבר צר | recovery אוטומטי ב-`click_goal`; במיפוי ידני — מקש `c` |
+| `launch_hint.py` / build ישן | `git pull && catkin_make && source devel/setup.bash` |
+
+## מסמכי קורס
+
+- [ ] מצגת (10–12 שקפים) + קישור GitHub וסרטון
+- [ ] מסמך תיאוריה (5–7 עמודים)
+- [ ] הקלטת דמו (5–12 דק') — מיפוי + ניווט + עקיפת מכשול
+- [ ] מאגר GitHub זה
+- [ ] טופס Project Summary
+
+## מקורות
 
 - [ROS Navigation in 5 Days — The Construct](https://app.theconstructsim.com/desktop/course/57)
-- [Robotnik summit_xl_sim](https://github.com/RobotnikAutomation/summit_xl_sim)
-- [Robotnik summit_xl_common](https://github.com/RobotnikAutomation/summit_xl_common)
-- [ROS Navigation Stack Wiki](http://wiki.ros.org/navigation)
+- [ROS Navigation Stack](http://wiki.ros.org/navigation)
 
-## License
+## רישיון
 
-MIT — for academic course project use.
+MIT — שימוש אקדמי בפרויקט הקורס.
