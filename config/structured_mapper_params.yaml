@@ -73,6 +73,18 @@ bootstrap_clearance: 0.35
 bootstrap_forward_clearance: 0.85
 bootstrap_forward_speed: 0.25
 
+# Must-visit points - the robot actively drives to each at least once and
+# scans it, independent of frontier coverage, so a known area is never missed.
+# TWO ways to set them:
+#   1. Live in RViz: use the "Publish Point" tool and click anywhere on the map
+#      while mapping runs. ALWAYS correct - it refers to the current map.
+#   2. visit_waypoints below: hard-coded [x, y] in the map frame. ONLY reliable
+#      if the spawn pose is consistent across runs (gmapping anchors the map at
+#      the spawn pose; with a random spawn the same coords map to a different
+#      physical spot). Read coords from RViz or the gmapping "Laser Pose" log.
+visit_waypoints: []           # e.g. [[2.3, 7.6], [-3.0, 1.0]]
+visit_timeout: 45.0           # max seconds to reach each must-visit point
+
 # Completion / coverage
 max_unknown_ratio: 0.10    # (used by exploration_monitor) save when unknown <= this
 max_runtime: 1800.0        # hard cap on total mapping time (s) - larger for outdoors

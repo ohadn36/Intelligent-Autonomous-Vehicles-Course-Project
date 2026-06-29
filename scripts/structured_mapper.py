@@ -35,7 +35,7 @@ import actionlib
 import rospy
 import tf
 from actionlib_msgs.msg import GoalStatus
-from geometry_msgs.msg import Quaternion, Twist
+from geometry_msgs.msg import PointStamped, Quaternion, Twist
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from nav_msgs.msg import OccupancyGrid
 from sensor_msgs.msg import LaserScan
@@ -162,6 +162,19 @@ class StructuredMapper(object):
         self.server_wait_timeout = rospy.get_param("~server_wait_timeout", 60.0)
         self.global_max_stuck = int(rospy.get_param("~global_max_stuck", 25))
 
+        # Must-visit points (map frame). The robot actively drives to each at
+        # least once, independent of frontiers, so a known area is never missed.
+        # Seeded from the visit_waypoints param AND/OR clicked live in RViz
+        # (Publish Point -> /clicked_point). Clicked points are always correct
+        # because they refer to the CURRENT map; hard-coded visit_waypoints are
+        # only valid if the map frame is consistent across runs (gmapping
+        # anchors the map at the spawn pose, which varies with a random spawn).
+        self.visit_timeout = rospy.get_param("~visit_timeout", 45.0)
+        self.pending_visits = []
+        for wp in rospy.get_param("~visit_waypoints", []):
+            if isinstance(wp, (list, tuple)) and len(wp) >= 2:
+                self.pending_visits.append((float(wp[0]), float(wp[1])))
+
         # Bootstrap
         self.bootstrap_clearance = rospy.get_param("~bootstrap_clearance", 0.35)
         self.bootstrap_forward_clearance = rospy.get_param("~bootstrap_forward_clearance", 0.85)
@@ -214,6 +227,8 @@ class StructuredMapper(object):
 
         rospy.Subscriber("/map", OccupancyGrid, self.map_cb, queue_size=1)
         rospy.Subscriber(self.scan_topic, LaserScan, self.scan_cb, queue_size=1)
+        # Live "go map there" points clicked in RViz (Publish Point tool).
+        rospy.Subscriber("/clicked_point", PointStamped, self.clicked_point_cb, queue_size=8)
 
         rospy.loginfo("Structured mapper: waiting for move_base action server...")
         if not self.client.wait_for_server(rospy.Duration(self.server_wait_timeout)):
@@ -231,6 +246,12 @@ class StructuredMapper(object):
 
     def scan_cb(self, msg):
         self.latest_scan = msg
+
+    def clicked_point_cb(self, msg):
+        self.pending_visits.append((msg.point.x, msg.point.y))
+        rospy.loginfo(
+            "Queued must-visit point (%.2f, %.2f) from RViz Publish Point.",
+            msg.point.x, msg.point.y)
 
     def _get_scan(self):
         return self.latest_scan
@@ -879,6 +900,28 @@ class StructuredMapper(object):
             min_front=self.creep_min_front,
         )
 
+    def service_visits(self):
+        """Actively drive to every queued must-visit point (>= once each).
+
+        Independent of frontiers: guarantees the robot physically reaches each
+        requested area (e.g. the kitchen) and scans it, so known regions are
+        never missed. Uses the same standoff + recovery as any other goal.
+        """
+        while self.pending_visits and not rospy.is_shutdown():
+            if self.timed_out():
+                return
+            vx, vy = self.pending_visits.pop(0)
+            rospy.loginfo("Actively visiting requested point (%.2f, %.2f).", vx, vy)
+            self.set_state("visit")
+            # Drop any blacklist entry near a deliberately-requested point so it
+            # is not refused because of an earlier transient failure.
+            self.blacklist = [
+                b for b in self.blacklist
+                if math.hypot(b[0] - vx, b[1] - vy) >= self.blacklist_radius
+            ]
+            self.drive_to(vx, vy, timeout=self.visit_timeout)
+            self.spin360("visit-scan")
+
     def explore_frontiers(self):
         """Full-coverage frontier exploration of the WHOLE reachable space.
 
@@ -902,6 +945,11 @@ class StructuredMapper(object):
             if self.timed_out():
                 rospy.logwarn("Exploration hit max runtime - stopping.")
                 break
+
+            # Points requested live in RViz get priority and are always visited.
+            if self.pending_visits:
+                self.service_visits()
+                last_improve = rospy.Time.now()
 
             cells = find_frontier_cells(self.map_msg)
             clusters = cluster_frontier_cells(cells)
@@ -1008,6 +1056,9 @@ class StructuredMapper(object):
             self.set_state("go-to-center")
             self.drive_to(center[0], center[1], timeout=self.per_goal_timeout * 1.5)
         self.spin360("center-spin")
+
+        # Actively visit any pre-configured must-visit points before sweeping.
+        self.service_visits()
 
         self.perimeter_tour()
         self.explore_frontiers()
