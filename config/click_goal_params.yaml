@@ -1,0 +1,11 @@
+# click_goal.py — stuck recovery for narrow passages during navigation.
+stuck_time: 3.5           # seconds without progress before recovery kicks in
+stuck_distance: 0.08      # metres moved in stuck_time to count as progress
+max_recoveries: 6         # back/align/creep retries before giving up
+goal_clearance: 0.28      # snap clicked goals this far from obstacles (m)
+recovery_creep_speed: 0.10
+recovery_creep_duration: 7.0
+recovery_back_speed: 0.10
+recovery_back_dist: 0.30
+recovery_opening_max: 1.35  # laser opening width for corridor creep (m)
+scan_topic: /kobuki/laser/scan

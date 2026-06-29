@@ -19,6 +19,7 @@ catkin_install_python(PROGRAMS
   scripts/exploration_monitor.py
   scripts/exploration_utils.py
   scripts/click_goal.py
+  scripts/launch_hint.py
   scripts/navigation_status.py
   scripts/set_initial_pose_from_odom.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
